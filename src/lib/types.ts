@@ -1,0 +1,50 @@
+export type QuestionType = 'choice' | 'judge' | 'short'
+
+/** knowledge = 知识内容，需要先拆知识点；questions = 已整理好的题库，直接抽取题目 */
+export type DocKind = 'knowledge' | 'questions'
+
+export type QuestionStatus = 'draft' | 'confirmed'
+
+export interface Doc {
+  id: number
+  title: string
+  source_type: string
+  char_count: number
+  created_at: string
+  kind: DocKind
+}
+
+export interface KnowledgePoint {
+  id: number
+  document_id: number
+  title: string
+  summary: string
+  excerpts: string[]
+  order_index: number
+}
+
+export interface Question {
+  id: number
+  document_id: number
+  knowledge_point_id: number | null
+  type: QuestionType
+  stem: string
+  options: string[]
+  answer: string
+  explanation: string
+  status: QuestionStatus
+}
+
+export interface QuestionCounts {
+  choice: number
+  judge: number
+  short: number
+}
+
+export const TYPE_LABEL: Record<QuestionType, string> = {
+  choice: '选择题',
+  judge: '判断题',
+  short: '解答题',
+}
+
+export const LETTERS = ['A', 'B', 'C', 'D', 'E', 'F']
