@@ -1,6 +1,7 @@
 import { cloud } from '../cloud'
 import type { QuestionType, QuestionCounts, DocKind } from './types'
 import { LETTERS } from './types'
+import { loadAISettings, type AISettings } from './settings'
 
 /* ------------------------------------------------------------------ */
 /* 基础调用层                                                          */
@@ -36,12 +37,72 @@ export function describeError(err: any): string {
   return message
 }
 
+/* ------------------------ 用户自带模型接口 ------------------------ */
+
+async function chatViaCustom(
+  config: AISettings,
+  opts: { system: string; user: string; temperature?: number },
+): Promise<string> {
+  const base = config.baseUrl.replace(/\/+$/, '')
+  const url = /\/chat\/completions$/.test(base) ? base : `${base}/chat/completions`
+
+  let response: Response
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: config.model,
+        messages: [
+          { role: 'system', content: opts.system },
+          { role: 'user', content: opts.user },
+        ],
+        temperature: opts.temperature ?? 0.4,
+      }),
+    })
+  } catch {
+    throw new Error(
+      '连不上自定义模型接口。常见原因是该服务商不允许浏览器直连（CORS），或接口地址填错。',
+    )
+  }
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '')
+    throw new Error(`自定义模型接口返回 ${response.status}：${detail.slice(0, 160)}`)
+  }
+
+  const data = await response.json().catch(() => null)
+  let content = data?.choices?.[0]?.message?.content
+  if (Array.isArray(content)) {
+    content = content.map((part: any) => part?.text || '').join('')
+  }
+  if (typeof content !== 'string' || !content.trim()) {
+    throw new Error('自定义模型接口没有返回文本，请确认模型名与接口地址是否匹配。')
+  }
+  return content
+}
+
+export async function testCustomEndpoint(config: AISettings): Promise<string> {
+  const reply = await chatViaCustom(config, {
+    system: '你是测试助手，回答尽量短。',
+    user: '只回复两个字：通了',
+    temperature: 0,
+  })
+  return reply.trim().slice(0, 30)
+}
+
 async function chatText(opts: {
   system: string
   user: string
   temperature?: number
   signal?: AbortSignal
 }): Promise<string> {
+  const custom = loadAISettings()
+  if (custom) return chatViaCustom(custom, opts)
+
   const model = await resolveModel()
 
   const run = async (structured: boolean): Promise<string> => {

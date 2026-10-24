@@ -6,11 +6,12 @@ interface Props {
   docs: Doc[]
   loading: boolean
   userLabel: string
+  customAI: boolean
   onOpen: (id: number) => void
   onUpload: (file: File) => void
   onDelete: (doc: Doc) => void
   onSignOut: () => void
-  busy: string
+  onOpenSettings: () => void
 }
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -32,11 +33,12 @@ export default function Library({
   docs,
   loading,
   userLabel,
+  customAI,
   onOpen,
   onUpload,
   onDelete,
   onSignOut,
-  busy,
+  onOpenSettings,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
@@ -56,7 +58,14 @@ export default function Library({
           <span className="brand-section">资料库</span>
         </div>
         <div className="topbar-right">
+          {customAI && <span className="ai-chip">自定义模型</span>}
           <span className="user-chip">{userLabel}</span>
+          <button className="icon-btn" title="AI 接口设置" onClick={onOpenSettings}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+          </button>
           <button className="btn subtle" onClick={onSignOut}>
             退出
           </button>
@@ -104,9 +113,7 @@ export default function Library({
                 <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" strokeLinecap="round" />
               </svg>
             </div>
-            <p className="dropzone-title">
-              {busy || '拖入文件，或点击选择'}
-            </p>
+            <p className="dropzone-title">拖入文件，或点击选择</p>
             <p className="dropzone-hint">支持 PDF、Word(.docx)、Markdown、TXT，单份不超过 20MB</p>
           </div>
         </div>

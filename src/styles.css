@@ -2071,6 +2071,169 @@ textarea {
   border-top: 1px solid var(--line);
 }
 
+/* ---------------------------- 任务进度 ---------------------------- */
+
+.task-card {
+  position: fixed;
+  top: 74px;
+  right: 24px;
+  z-index: 70;
+  min-width: 214px;
+  max-width: 320px;
+  padding: 12px 15px 13px;
+  background: rgba(255, 253, 249, 0.98);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(8px);
+  animation: task-in 0.2s ease;
+}
+
+@keyframes task-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.task-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.task-label {
+  white-space: nowrap;
+}
+
+.task-track {
+  margin-top: 10px;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.task-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.task-count {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------- 设置弹窗 ---------------------------- */
+
+.ai-chip {
+  padding: 3px 9px;
+  border-radius: 100px;
+  border: 1px solid #e8d3c2;
+  background: var(--accent-tint);
+  color: var(--accent-dark);
+  font-size: 11.5px;
+  line-height: 18px;
+}
+
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(26, 25, 21, 0.3);
+  backdrop-filter: blur(3px);
+}
+
+.modal {
+  width: 100%;
+  max-width: 468px;
+  padding: 26px 26px 20px;
+  background: #fffdf9;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: 0 20px 60px -24px rgba(26, 25, 21, 0.45);
+}
+
+.modal h2 {
+  margin: 0 0 6px;
+  font-family: var(--font-serif);
+  font-size: 20px;
+  font-weight: 500;
+}
+
+.modal-sub {
+  margin: 0 0 20px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--ink-3);
+}
+
+.ai-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ai-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ai-field > span {
+  font-size: 12px;
+  color: var(--ink-3);
+  letter-spacing: 0.02em;
+}
+
+.ai-note {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  line-height: 1.75;
+  color: var(--ink-3);
+}
+
+.modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.modal-actions-right {
+  display: flex;
+  gap: 8px;
+}
+
+.alert.ok {
+  background: var(--good-tint);
+  border: 1px solid #cfe0d3;
+  color: #3d6249;
+}
+
+.alert.info {
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+}
+
 /* ------------------------------ 响应式 ------------------------------ */
 
 @media (max-width: 900px) {
@@ -2160,5 +2323,25 @@ textarea {
     flex-direction: column;
     align-items: stretch;
     gap: 10px;
+  }
+
+  .task-card {
+    top: 68px;
+    right: 12px;
+    left: 12px;
+    max-width: none;
+  }
+
+  .modal {
+    padding: 22px 18px 16px;
+  }
+
+  .modal-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .modal-actions-right {
+    flex-direction: column-reverse;
   }
 }

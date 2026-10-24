@@ -6,12 +6,15 @@ import {
   describeError,
   detectDocKind,
   extractExistingQuestions,
-  type RawQuestion,
+  extractKnowledgePoints,
 } from './lib/llm'
+import { hasCustomAI } from './lib/settings'
 import { parseFile } from './lib/parseFile'
 import Login from './components/Login'
 import Library from './components/Library'
 import Workspace from './components/Workspace'
+import AISettings from './components/AISettings'
+import TaskProgress, { type TaskState } from './components/TaskProgress'
 import { Logo } from './components/Logo'
 
 type ActiveDoc = Doc & { content: string }
@@ -62,7 +65,9 @@ export default function App() {
   const [docs, setDocs] = useState<Doc[]>([])
   const [loadingDocs, setLoadingDocs] = useState(false)
   const [activeDoc, setActiveDoc] = useState<ActiveDoc | null>(null)
-  const [busy, setBusy] = useState('')
+  const [task, setTask] = useState<TaskState | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [customAI, setCustomAI] = useState(() => hasCustomAI())
   const [toast, setToast] = useState<string>('')
   const toastTimer = useRef<number | null>(null)
 
@@ -71,7 +76,7 @@ export default function App() {
   const notify = useCallback((message: string) => {
     setToast(message)
     if (toastTimer.current) window.clearTimeout(toastTimer.current)
-    toastTimer.current = window.setTimeout(() => setToast(''), 5000)
+    toastTimer.current = window.setTimeout(() => setToast(''), 6000)
   }, [])
 
   const loadDocs = useCallback(async () => {
@@ -140,13 +145,17 @@ export default function App() {
     setActiveDoc(null)
   }
 
+  /**
+   * 导入链路：解析 → 识别形态 → 落库 → 按形态直接产出（题库抽题 / 知识内容拆知识点）
+   * 全程在右上角显示进度，用户不需要再手动点"生成知识点"。
+   */
   async function handleUpload(file: File) {
-    setBusy('正在解析文件…')
+    const title = file.name.replace(/\.[^.]+$/, '').slice(0, 120) || '未命名资料'
     try {
+      setTask({ label: '正在解析文件', done: 0, total: 0 })
       const parsed = await parseFile(file)
-      const title = file.name.replace(/\.[^.]+$/, '').slice(0, 120) || '未命名资料'
 
-      setBusy('正在识别资料类型…')
+      setTask({ label: '正在识别资料类型', done: 0, total: 0 })
       let kind: DocKind = 'knowledge'
       try {
         kind = await detectDocKind(parsed.text)
@@ -154,23 +163,7 @@ export default function App() {
         kind = 'knowledge'
       }
 
-      let imported: RawQuestion[] = []
-      let truncated = false
-      if (kind === 'questions') {
-        setBusy('正在抽取题目 0/0…')
-        try {
-          const result = await extractExistingQuestions(parsed.text, (done, total) =>
-            setBusy(`正在抽取题目 ${done}/${total}…`),
-          )
-          imported = result.questions
-          truncated = result.truncated
-        } catch (error) {
-          kind = 'knowledge'
-          notify(`${describeError(error)} 已按知识内容处理。`)
-        }
-      }
-
-      setBusy('正在保存…')
+      setTask({ label: '正在保存资料', done: 0, total: 0 })
       const created = await repo.createDocument({
         title,
         sourceType: parsed.sourceType,
@@ -178,50 +171,61 @@ export default function App() {
         kind,
       })
 
-      if (kind === 'questions' && imported.length) {
-        await repo.addQuestions(
-          imported.map((question) => ({
-            document_id: created.id,
-            knowledge_point_id: null,
-            type: question.type,
-            stem: question.stem,
-            options: question.options,
-            answer: question.answer,
-            explanation: question.explanation,
-            status: 'draft' as const,
-          })),
-        )
+      if (kind === 'questions') {
+        try {
+          const result = await extractExistingQuestions(parsed.text, (done, total) =>
+            setTask({ label: '正在抽取已有题目', done, total }),
+          )
+          await repo.addQuestions(
+            result.questions.map((question) => ({
+              document_id: created.id,
+              knowledge_point_id: null,
+              type: question.type,
+              stem: question.stem,
+              options: question.options,
+              answer: question.answer,
+              explanation: question.explanation,
+              status: 'draft' as const,
+            })),
+          )
+          notify(
+            `识别为「已有题库」，抽到 ${result.questions.length} 道题，检查确认后即可做题。${
+              result.truncated ? ' 资料较长，只分析了前面部分。' : ''
+            }`,
+          )
+        } catch (error) {
+          kind = 'knowledge'
+          await repo.setDocumentKind(created.id, 'knowledge')
+          notify(`${describeError(error)} 已改为按知识内容处理。`)
+        }
+      }
+
+      if (kind === 'knowledge') {
+        try {
+          const result = await extractKnowledgePoints(parsed.text, (done, total) =>
+            setTask({ label: '正在拆解知识点', done, total }),
+          )
+          await repo.replacePoints(created.id, result.points)
+          notify(
+            `已自动拆出 ${result.points.length} 个知识点。${
+              result.truncated ? ' 资料较长，只分析了前面部分。' : ''
+            }`,
+          )
+        } catch (error) {
+          notify(`${describeError(error)} 可以进入资料后手动重试。`)
+        }
       }
 
       await loadDocs()
-      setActiveDoc({
-        id: created.id,
-        title: created.title,
-        source_type: created.source_type,
-        char_count: created.char_count,
-        created_at: created.created_at,
-        kind: created.kind,
-        content: parsed.text,
-      })
-
-      if (kind === 'questions') {
-        notify(
-          `识别为「已有题库」，抽取到 ${imported.length} 道题，检查确认后即可开始做题。${
-            truncated ? '资料较长，只分析了前一部分。' : ''
-          }`,
-        )
-      } else {
-        notify('识别为「知识内容」，可以在左侧生成知识点了。')
-      }
+      setActiveDoc({ ...created, kind, content: parsed.text })
     } catch (error) {
       notify((error as Error).message)
     } finally {
-      setBusy('')
+      setTask(null)
     }
   }
 
   async function openDoc(id: number) {
-    setBusy('正在打开…')
     try {
       const detail = await repo.getDocument(id)
       if (!detail) {
@@ -231,8 +235,6 @@ export default function App() {
       setActiveDoc(detail)
     } catch (error) {
       notify(describeError(error))
-    } finally {
-      setBusy('')
     }
   }
 
@@ -272,30 +274,48 @@ export default function App() {
   }
 
   const showApp = signedIn || guest
+  const openSettings = () => setSettingsOpen(true)
 
   return (
     <>
       {!showApp ? (
         <Login onSignedIn={handleSignedIn} onGuest={enterGuest} initialError={authError} />
       ) : activeDoc ? (
-        <Workspace doc={activeDoc} repo={repo} onBack={() => setActiveDoc(null)} notify={notify} />
+        <Workspace
+          doc={activeDoc}
+          repo={repo}
+          onBack={() => setActiveDoc(null)}
+          onOpenSettings={openSettings}
+          notify={notify}
+        />
       ) : (
         <Library
           docs={docs}
           loading={loadingDocs}
           userLabel={guest ? '游客' : maskUser(session)}
+          customAI={customAI}
           onOpen={openDoc}
           onUpload={handleUpload}
           onDelete={deleteDoc}
           onSignOut={signOut}
-          busy={busy}
+          onOpenSettings={openSettings}
         />
       )}
+      <TaskProgress task={task} />
       {guest && (
         <div className="guest-badge">
           <span className="guest-dot" />
           游客模式 · 数据不保存
         </div>
+      )}
+      {settingsOpen && (
+        <AISettings
+          onClose={() => setSettingsOpen(false)}
+          onSaved={(active) => {
+            setCustomAI(active)
+            notify(active ? '已切换到自定义模型。' : '已恢复平台内置模型。')
+          }}
+        />
       )}
       {toast && <div className="toast">{toast}</div>}
     </>
