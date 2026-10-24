@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { cloud } from './cloud'
 import type { Doc, DocKind } from './lib/types'
-import { cloudRepo, memoryRepo, type Repo } from './lib/repo'
+import { cloudRepo, guestRepo, type Repo } from './lib/repo'
 import {
   describeError,
   detectDocKind,
@@ -71,7 +71,7 @@ export default function App() {
   const [toast, setToast] = useState<string>('')
   const toastTimer = useRef<number | null>(null)
 
-  const repo: Repo = guest ? memoryRepo : cloudRepo
+  const repo: Repo = guest ? guestRepo : cloudRepo
 
   const notify = useCallback((message: string) => {
     setToast(message)
@@ -312,7 +312,7 @@ export default function App() {
       return
     }
     setDocs((prev) => prev.filter((item) => item.id !== doc.id))
-    notify(guest ? '已删除（仅本次会话）。' : '已删除。')
+    notify('已删除。')
   }
 
   async function signOut() {
@@ -373,7 +373,7 @@ export default function App() {
       {guest && (
         <div className="guest-badge">
           <span className="guest-dot" />
-          游客模式 · 数据不保存
+          游客模式 · 数据仅存本机
         </div>
       )}
       {settingsOpen && (

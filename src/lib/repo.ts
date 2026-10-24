@@ -199,14 +199,55 @@ export const cloudRepo: Repo = {
 
 /* ---------------------------- 游客实现 ---------------------------- */
 
-const memory = {
-  documents: [] as DocWithContent[],
-  points: [] as KnowledgePoint[],
-  questions: [] as Question[],
-  seq: { doc: 0, point: 0, question: 0 },
+/**
+ * 游客模式的数据全部留在本机 localStorage：
+ * 刷新、关标签页、下次再打开都还在，但不会同步到其它设备。
+ */
+const STORAGE_KEY = 'zhiwei.guest.v1'
+
+interface GuestSnapshot {
+  documents: DocWithContent[]
+  points: KnowledgePoint[]
+  questions: Question[]
+  seq: { doc: number; point: number; question: number }
 }
 
-export const memoryRepo: Repo = {
+function emptySnapshot(): GuestSnapshot {
+  return { documents: [], points: [], questions: [], seq: { doc: 0, point: 0, question: 0 } }
+}
+
+function loadSnapshot(): GuestSnapshot {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return emptySnapshot()
+    const parsed = JSON.parse(raw)
+    if (!parsed || !Array.isArray(parsed.documents)) return emptySnapshot()
+    return {
+      documents: parsed.documents,
+      points: Array.isArray(parsed.points) ? parsed.points : [],
+      questions: Array.isArray(parsed.questions) ? parsed.questions : [],
+      seq: {
+        doc: Number(parsed?.seq?.doc) || 0,
+        point: Number(parsed?.seq?.point) || 0,
+        question: Number(parsed?.seq?.question) || 0,
+      },
+    }
+  } catch {
+    return emptySnapshot()
+  }
+}
+
+const memory = loadSnapshot()
+
+function flush() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(memory))
+  } catch {
+    throw new Error('浏览器本地存储已满，删掉几份资料后再试。')
+  }
+}
+
+export const guestRepo: Repo = {
   async listDocuments() {
     return [...memory.documents]
       .sort((a, b) => b.id - a.id)
@@ -228,12 +269,14 @@ export const memoryRepo: Repo = {
       content,
     }
     memory.documents.push(created)
+    flush()
     return created
   },
 
   async setDocumentKind(id, kind) {
     const target = memory.documents.find((doc) => doc.id === id)
     if (target) target.kind = kind
+    flush()
   },
 
   async deleteDocument(id) {
@@ -241,6 +284,7 @@ export const memoryRepo: Repo = {
     memory.documents = memory.documents.filter((doc) => doc.id !== id)
     memory.points = memory.points.filter((point) => point.document_id !== id)
     memory.questions = memory.questions.filter((question) => question.document_id !== id)
+    flush()
     return existed
   },
 
@@ -263,6 +307,7 @@ export const memoryRepo: Repo = {
       order_index: index,
     }))
     memory.points.push(...created)
+    flush()
     return created
   },
 
@@ -275,6 +320,7 @@ export const memoryRepo: Repo = {
   async addQuestions(rows) {
     const created = rows.map((row) => ({ ...toPayload(row), id: ++memory.seq.question }))
     memory.questions.push(...created)
+    flush()
     return created
   },
 
@@ -282,6 +328,7 @@ export const memoryRepo: Repo = {
     const target = memory.questions.find((question) => question.id === id)
     if (!target) return null
     Object.assign(target, patch)
+    flush()
     return target
   },
 
@@ -293,12 +340,14 @@ export const memoryRepo: Repo = {
         updated.push(question)
       }
     }
+    flush()
     return updated
   },
 
   async deleteQuestion(id) {
     const existed = memory.questions.some((question) => question.id === id)
     memory.questions = memory.questions.filter((question) => question.id !== id)
+    flush()
     return existed
   },
 }
