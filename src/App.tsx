@@ -14,7 +14,7 @@ import Login from './components/Login'
 import Library from './components/Library'
 import Workspace from './components/Workspace'
 import AISettings from './components/AISettings'
-import TaskProgress, { type TaskState } from './components/TaskProgress'
+import TaskStack, { type TaskItem } from './components/TaskProgress'
 import { Logo } from './components/Logo'
 
 type ActiveDoc = Doc & { content: string }
@@ -65,7 +65,7 @@ export default function App() {
   const [docs, setDocs] = useState<Doc[]>([])
   const [loadingDocs, setLoadingDocs] = useState(false)
   const [activeDoc, setActiveDoc] = useState<ActiveDoc | null>(null)
-  const [task, setTask] = useState<TaskState | null>(null)
+  const [tasks, setTasks] = useState<TaskItem[]>([])
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [customAI, setCustomAI] = useState(() => hasCustomAI())
   const [toast, setToast] = useState<string>('')
@@ -89,6 +89,14 @@ export default function App() {
       setLoadingDocs(false)
     }
   }, [repo, notify])
+
+  const updateTask = useCallback((id: string, patch: Partial<TaskItem>) => {
+    setTasks((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)))
+  }, [])
+
+  const dropTask = useCallback((id: string) => {
+    setTasks((prev) => prev.filter((item) => item.id !== id))
+  }, [])
 
   useEffect(() => {
     if (location.hash === '#guest') {
@@ -146,16 +154,16 @@ export default function App() {
   }
 
   /**
-   * 导入链路：解析 → 识别形态 → 落库 → 按形态直接产出（题库抽题 / 知识内容拆知识点）
-   * 全程在右上角显示进度，用户不需要再手动点"生成知识点"。
+   * 单个文件的导入链路：解析 → 识别形态 → 落库 → 按形态直接产出
+   * 每个文件独立成一个任务卡片，多个文件可以同时进行。
    */
-  async function handleUpload(file: File) {
+  async function importOne(file: File, taskId: string): Promise<ActiveDoc | null> {
     const title = file.name.replace(/\.[^.]+$/, '').slice(0, 120) || '未命名资料'
     try {
-      setTask({ label: '正在解析文件', done: 0, total: 0 })
+      updateTask(taskId, { label: '正在解析文件', done: 0, total: 0 })
       const parsed = await parseFile(file)
 
-      setTask({ label: '正在识别资料类型', done: 0, total: 0 })
+      updateTask(taskId, { label: '正在识别资料类型', done: 0, total: 0 })
       let kind: DocKind = 'knowledge'
       try {
         kind = await detectDocKind(parsed.text)
@@ -163,7 +171,7 @@ export default function App() {
         kind = 'knowledge'
       }
 
-      setTask({ label: '正在保存资料', done: 0, total: 0 })
+      updateTask(taskId, { label: '正在保存资料', done: 0, total: 0 })
       const created = await repo.createDocument({
         title,
         sourceType: parsed.sourceType,
@@ -174,7 +182,7 @@ export default function App() {
       if (kind === 'questions') {
         try {
           const result = await extractExistingQuestions(parsed.text, (done, total) =>
-            setTask({ label: '正在抽取已有题目', done, total }),
+            updateTask(taskId, { label: '正在抽取已有题目', done, total }),
           )
           await repo.addQuestions(
             result.questions.map((question) => ({
@@ -203,7 +211,7 @@ export default function App() {
       if (kind === 'knowledge') {
         try {
           const result = await extractKnowledgePoints(parsed.text, (done, total) =>
-            setTask({ label: '正在拆解知识点', done, total }),
+            updateTask(taskId, { label: '正在拆解知识点', done, total }),
           )
           await repo.replacePoints(created.id, result.points)
           notify(
@@ -216,12 +224,37 @@ export default function App() {
         }
       }
 
-      await loadDocs()
-      setActiveDoc({ ...created, kind, content: parsed.text })
+      updateTask(taskId, { status: 'done', label: '已完成' })
+      window.setTimeout(() => dropTask(taskId), 1600)
+      return { ...created, kind, content: parsed.text }
     } catch (error) {
-      notify((error as Error).message)
-    } finally {
-      setTask(null)
+      const message = (error as Error).message
+      updateTask(taskId, { status: 'error', label: '导入失败', error: message })
+      window.setTimeout(() => dropTask(taskId), 6000)
+      notify(message)
+      return null
+    }
+  }
+
+  async function handleUpload(files: File[]) {
+    if (!files.length) return
+    const stamp = Date.now()
+    const items: TaskItem[] = files.map((file, index) => ({
+      id: `${stamp}-${index}`,
+      title: file.name,
+      label: '正在准备',
+      done: 0,
+      total: 0,
+      status: 'working',
+    }))
+    setTasks((prev) => [...items, ...prev])
+
+    const results = await Promise.all(files.map((file, index) => importOne(file, items[index].id)))
+    await loadDocs()
+
+    const ready = results.filter((item): item is ActiveDoc => !!item)
+    if (files.length === 1 && ready.length === 1) {
+      setActiveDoc(ready[0])
     }
   }
 
@@ -301,7 +334,7 @@ export default function App() {
           onOpenSettings={openSettings}
         />
       )}
-      <TaskProgress task={task} />
+      <TaskStack tasks={tasks} />
       {guest && (
         <div className="guest-badge">
           <span className="guest-dot" />

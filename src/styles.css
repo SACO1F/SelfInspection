@@ -2073,14 +2073,22 @@ textarea {
 
 /* ---------------------------- 任务进度 ---------------------------- */
 
-.task-card {
+.task-stack {
   position: fixed;
   top: 74px;
   right: 24px;
   z-index: 70;
-  min-width: 214px;
-  max-width: 320px;
-  padding: 12px 15px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+  pointer-events: none;
+}
+
+.task-card {
+  width: 264px;
+  padding: 11px 14px 12px;
+  color: var(--ink-2);
   background: rgba(255, 253, 249, 0.98);
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -2100,20 +2108,24 @@ textarea {
   }
 }
 
-.task-head {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  font-size: 13px;
-  color: var(--ink-2);
-}
-
-.task-label {
+.task-title {
+  margin: 0 0 9px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.task-track {
+.task-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-top: 10px;
+}
+
+.task-track {
+  flex: 1;
   height: 3px;
   border-radius: 3px;
   background: var(--line);
@@ -2128,10 +2140,16 @@ textarea {
 }
 
 .task-count {
-  margin-top: 6px;
-  font-size: 11.5px;
+  font-size: 11px;
   color: var(--ink-3);
   font-variant-numeric: tabular-nums;
+}
+
+.task-error {
+  margin: 9px 0 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--bad);
 }
 
 /* ---------------------------- 设置弹窗 ---------------------------- */
@@ -2325,11 +2343,15 @@ textarea {
     gap: 10px;
   }
 
-  .task-card {
+  .task-stack {
     top: 68px;
     right: 12px;
     left: 12px;
-    max-width: none;
+    align-items: stretch;
+  }
+
+  .task-card {
+    width: auto;
   }
 
   .modal {

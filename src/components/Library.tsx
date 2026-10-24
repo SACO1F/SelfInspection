@@ -8,7 +8,7 @@ interface Props {
   userLabel: string
   customAI: boolean
   onOpen: (id: number) => void
-  onUpload: (file: File) => void
+  onUpload: (files: File[]) => void
   onDelete: (doc: Doc) => void
   onSignOut: () => void
   onOpenSettings: () => void
@@ -44,8 +44,8 @@ export default function Library({
   const [dragging, setDragging] = useState(false)
 
   function pick(files: FileList | null) {
-    const file = files?.[0]
-    if (file) onUpload(file)
+    const picked = Array.from(files || [])
+    if (picked.length) onUpload(picked)
   }
 
   return (
@@ -100,6 +100,7 @@ export default function Library({
             ref={inputRef}
             type="file"
             accept=".pdf,.docx,.md,.markdown,.txt"
+            multiple
             hidden
             onChange={(event) => {
               pick(event.target.files)
@@ -114,7 +115,9 @@ export default function Library({
               </svg>
             </div>
             <p className="dropzone-title">拖入文件，或点击选择</p>
-            <p className="dropzone-hint">支持 PDF、Word(.docx)、Markdown、TXT，单份不超过 20MB</p>
+            <p className="dropzone-hint">
+              支持 PDF、Word(.docx)、Markdown、TXT，单份不超过 20MB，可一次选多份
+            </p>
           </div>
         </div>
 
