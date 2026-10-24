@@ -8,6 +8,8 @@ export interface TaskItem {
   total: number
   status: 'working' | 'done' | 'error'
   error?: string
+  /** 资料落库后回填，用于在资料卡片上显示同一条进度 */
+  docId?: number
 }
 
 function TaskCard({ task }: { task: TaskItem }) {

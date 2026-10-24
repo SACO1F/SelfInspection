@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import type { Doc } from '../lib/types'
+import type { TaskItem } from './TaskProgress'
 import { Logo } from './Logo'
 
 interface Props {
@@ -7,6 +8,7 @@ interface Props {
   loading: boolean
   userLabel: string
   customAI: boolean
+  tasks: TaskItem[]
   onOpen: (id: number) => void
   onUpload: (files: File[]) => void
   onDelete: (doc: Doc) => void
@@ -34,6 +36,7 @@ export default function Library({
   loading,
   userLabel,
   customAI,
+  tasks,
   onOpen,
   onUpload,
   onDelete,
@@ -134,32 +137,61 @@ export default function Library({
           </div>
         ) : (
           <div className="doc-grid">
-            {docs.map((doc) => (
-              <article className="doc-card" key={doc.id}>
-                <button className="doc-card-main" onClick={() => onOpen(doc.id)}>
-                  <div className="doc-tags">
-                    <div className="doc-tag">{SOURCE_LABEL[doc.source_type] || doc.source_type}</div>
-                    {doc.kind === 'questions' && <div className="doc-tag accent">题库</div>}
-                  </div>
-                  <h3 className="doc-title">{doc.title}</h3>
-                  <p className="doc-meta">
-                    {doc.char_count.toLocaleString()} 字 · {formatDate(doc.created_at)}
-                  </p>
-                </button>
-                <button
-                  className="doc-delete"
-                  title="删除"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    onDelete(doc)
-                  }}
-                >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
-                    <path d="M5 7h14M10 11v6M14 11v6M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" strokeLinecap="round" />
-                  </svg>
-                </button>
-              </article>
-            ))}
+            {docs.map((doc) => {
+              const running = tasks.find(
+                (item) => item.docId === doc.id && item.status === 'working',
+              )
+              const percent =
+                running && running.total > 0
+                  ? Math.min(100, Math.round((running.done / running.total) * 100))
+                  : 0
+
+              return (
+                <article className="doc-card" key={doc.id}>
+                  <button className="doc-card-main" onClick={() => onOpen(doc.id)}>
+                    <div className="doc-tags">
+                      <div className="doc-tag">
+                        {SOURCE_LABEL[doc.source_type] || doc.source_type}
+                      </div>
+                      {doc.kind === 'questions' && <div className="doc-tag accent">题库</div>}
+                    </div>
+                    <h3 className="doc-title">{doc.title}</h3>
+                    <p className="doc-meta">
+                      {doc.char_count.toLocaleString()} 字 · {formatDate(doc.created_at)}
+                    </p>
+
+                    {running && (
+                      <div className="doc-progress">
+                        {running.total > 0 && (
+                          <div className="doc-progress-track">
+                            <div
+                              className="doc-progress-fill"
+                              style={{ width: `${percent}%` }}
+                            />
+                          </div>
+                        )}
+                        <span className="doc-progress-label">
+                          {running.label}
+                          {running.total > 0 ? ` ${running.done}/${running.total}` : '…'}
+                        </span>
+                      </div>
+                    )}
+                  </button>
+                  <button
+                    className="doc-delete"
+                    title="删除"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onDelete(doc)
+                    }}
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+                      <path d="M5 7h14M10 11v6M14 11v6M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" strokeLinecap="round" />
+                    </svg>
+                  </button>
+                </article>
+              )
+            })}
           </div>
         )}
       </main>

@@ -79,16 +79,19 @@ export default function App() {
     toastTimer.current = window.setTimeout(() => setToast(''), 6000)
   }, [])
 
-  const loadDocs = useCallback(async () => {
-    setLoadingDocs(true)
-    try {
-      setDocs(await repo.listDocuments())
-    } catch (error) {
-      notify(describeError(error))
-    } finally {
-      setLoadingDocs(false)
-    }
-  }, [repo, notify])
+  const loadDocs = useCallback(
+    async (silent = false) => {
+      if (!silent) setLoadingDocs(true)
+      try {
+        setDocs(await repo.listDocuments())
+      } catch (error) {
+        notify(describeError(error))
+      } finally {
+        if (!silent) setLoadingDocs(false)
+      }
+    },
+    [repo, notify],
+  )
 
   const updateTask = useCallback((id: string, patch: Partial<TaskItem>) => {
     setTasks((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)))
@@ -178,6 +181,8 @@ export default function App() {
         content: parsed.text,
         kind,
       })
+      updateTask(taskId, { docId: created.id })
+      await loadDocs(true)
 
       if (kind === 'questions') {
         try {
@@ -250,7 +255,7 @@ export default function App() {
     setTasks((prev) => [...items, ...prev])
 
     const results = await Promise.all(files.map((file, index) => importOne(file, items[index].id)))
-    await loadDocs()
+    await loadDocs(true)
 
     const ready = results.filter((item): item is ActiveDoc => !!item)
     if (files.length === 1 && ready.length === 1) {
@@ -315,6 +320,7 @@ export default function App() {
         <Login onSignedIn={handleSignedIn} onGuest={enterGuest} initialError={authError} />
       ) : activeDoc ? (
         <Workspace
+          key={activeDoc.id}
           doc={activeDoc}
           repo={repo}
           onBack={() => setActiveDoc(null)}
@@ -327,6 +333,7 @@ export default function App() {
           loading={loadingDocs}
           userLabel={guest ? '游客' : maskUser(session)}
           customAI={customAI}
+          tasks={tasks}
           onOpen={openDoc}
           onUpload={handleUpload}
           onDelete={deleteDoc}

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { Doc, DocKind, KnowledgePoint, Question, QuestionCounts } from '../lib/types'
 import { TYPE_LABEL, LETTERS } from '../lib/types'
 import type { Repo, NewQuestion, QuestionPatch } from '../lib/repo'
+import { loadQueue, saveQueue, type QueueItem } from '../lib/queue'
 import { extractKnowledgePoints, generateQuestionsForKP, describeError } from '../lib/llm'
 import {
   buildSections,
@@ -24,11 +25,6 @@ interface Props {
 }
 
 type Tab = 'points' | 'drafts' | 'questions'
-
-interface QueueItem {
-  pointId: number
-  counts: QuestionCounts
-}
 
 const DEFAULT_COUNTS: QuestionCounts = { choice: 3, judge: 2, short: 1 }
 const COUNT_KEYS: (keyof QuestionCounts)[] = ['choice', 'judge', 'short']
@@ -264,7 +260,7 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
   const [points, setPoints] = useState<KnowledgePoint[]>([])
   const [questions, setQuestions] = useState<Question[]>([])
   const [drafts, setDrafts] = useState<Question[]>([])
-  const [queue, setQueue] = useState<QueueItem[]>([])
+  const [queue, setQueue] = useState<QueueItem[]>(() => loadQueue(doc.id))
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<Tab>(doc.kind === 'questions' ? 'drafts' : 'points')
   const [activeId, setActiveId] = useState<number | null>(null)
@@ -292,6 +288,16 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
         setQuestions(loadedConfirmed)
         setDrafts(loadedDrafts)
         setActiveId(loadedPoints[0]?.id ?? null)
+
+        // 知识点被删掉后，本地残留的队列项要一并清理
+        if (loadedPoints.length) {
+          setQueue((prev) => {
+            const valid = prev.filter((item) =>
+              loadedPoints.some((point) => point.id === item.pointId),
+            )
+            return valid.length === prev.length ? prev : valid
+          })
+        }
       } catch (err) {
         if (!cancelled) notify(describeError(err))
       } finally {
@@ -302,6 +308,10 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
       cancelled = true
     }
   }, [doc.id, repo, notify])
+
+  useEffect(() => {
+    saveQueue(doc.id, queue)
+  }, [doc.id, queue])
 
   const activePoint = useMemo(
     () => points.find((point) => point.id === activeId) || points[0] || null,
@@ -401,18 +411,22 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
     setQueue((prev) => prev.filter((item) => item.pointId !== pointId))
   }
 
-  async function generateFromQueue() {
-    if (!queue.length) return
+  /** 批量或单点出题共用一套逻辑；成功的从队列移除，失败的留在队列里 */
+  async function runGeneration(items: QueueItem[]) {
+    if (!items.length || submitting) return
     setSubmitting(true)
     const failedIds: number[] = []
     let added = 0
 
     try {
-      for (const [index, item] of queue.entries()) {
+      for (const [index, item] of items.entries()) {
         const point = points.find((entry) => entry.id === item.pointId)
-        if (!point) continue
+        if (!point) {
+          failedIds.push(item.pointId)
+          continue
+        }
 
-        setProgress({ label: `正在为「${point.title}」出题`, done: index, total: queue.length })
+        setProgress({ label: `正在为「${point.title}」出题`, done: index, total: items.length })
         try {
           const generated = await generateQuestionsForKP(point, item.counts)
           if (!generated.length) {
@@ -438,17 +452,35 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
       }
 
       setQueue((prev) => prev.filter((item) => failedIds.includes(item.pointId)))
-      notify(
-        added
-          ? `生成 ${added} 道题，已放入出题文档，检查后再加入题库。${
-              failedIds.length ? `另有 ${failedIds.length} 个知识点失败。` : ''
-            }`
-          : '这次没有生成出新题目，可以调整一下题量再试。',
-      )
+
+      if (items.length === 1) {
+        const title = points.find((entry) => entry.id === items[0].pointId)?.title
+        notify(
+          added
+            ? `已为「${title}」生成 ${added} 道题，已放入出题文档。`
+            : '这次没有生成出新题目，可以调整题量再试。',
+        )
+      } else {
+        notify(
+          added
+            ? `生成 ${added} 道题，已放入出题文档，检查后再加入题库。${
+                failedIds.length ? `另有 ${failedIds.length} 个知识点失败。` : ''
+              }`
+            : '这次没有生成出新题目，可以调整一下题量再试。',
+        )
+      }
     } finally {
       setProgress(null)
       setSubmitting(false)
     }
+  }
+
+  function generateFromQueue() {
+    return runGeneration(queue)
+  }
+
+  function generateOne(item: QueueItem) {
+    return runGeneration([item])
   }
 
   async function saveDraft(id: number, patch: QuestionPatch) {
@@ -801,6 +833,13 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
                               </div>
                             ))}
                           </div>
+                          <button
+                            className="btn subtle small"
+                            onClick={() => generateOne(item)}
+                            disabled={submitting || !!progress || !point}
+                          >
+                            出题
+                          </button>
                           <button
                             className="icon-btn small"
                             title="从出题文档移除"
