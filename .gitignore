@@ -7,3 +7,8 @@ Thumbs.db
 .vscode/
 .idea/
 *.log
+
+# 本地存档与内部标记，不纳入版本管理
+.git-legacy-*/
+.workbuddy/
+.wbapp_*.genie
