@@ -91,6 +91,50 @@ function CountsEditor({
   )
 }
 
+/** 选项 + 答案区，出题文档与题库共用；默认收起答案，避免直接看到答案 */
+function QuestionPreview({
+  question,
+  showAnswer,
+  onToggle,
+}: {
+  question: Question
+  showAnswer: boolean
+  onToggle: () => void
+}) {
+  return (
+    <>
+      {question.type === 'choice' && (
+        <ul className="bank-options">
+          {question.options.map((option, oi) => (
+            <li key={oi} className={showAnswer && LETTERS[oi] === question.answer ? 'right' : ''}>
+              <span>{LETTERS[oi]}</span>
+              {option}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="draft-reveal">
+        <button className="text-btn" onClick={onToggle}>
+          {showAnswer ? '隐藏答案' : '显示答案'}
+        </button>
+      </div>
+
+      {showAnswer && (
+        <>
+          <div className="bank-answer">
+            <span className="bank-answer-label">答案</span>
+            {question.type === 'choice'
+              ? `${question.answer}. ${question.options[LETTERS.indexOf(question.answer)] || ''}`
+              : question.answer}
+          </div>
+          {question.explanation && <p className="bank-explain">{question.explanation}</p>}
+        </>
+      )}
+    </>
+  )
+}
+
 function DraftCard({
   question,
   index,
@@ -237,40 +281,43 @@ function DraftCard({
       ) : (
         <>
           <p className="draft-stem">{question.stem}</p>
-          {question.type === 'choice' && (
-            <ul className="bank-options">
-              {question.options.map((option, oi) => (
-                <li
-                  key={oi}
-                  className={showAnswer && LETTERS[oi] === question.answer ? 'right' : ''}
-                >
-                  <span>{LETTERS[oi]}</span>
-                  {option}
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <div className="draft-reveal">
-            <button className="text-btn" onClick={() => setShowAnswer((value) => !value)}>
-              {showAnswer ? '隐藏答案' : '显示答案'}
-            </button>
-          </div>
-
-          {showAnswer && (
-            <>
-              <div className="bank-answer">
-                <span className="bank-answer-label">答案</span>
-                {question.type === 'choice'
-                  ? `${question.answer}. ${question.options[LETTERS.indexOf(question.answer)] || ''}`
-                  : question.answer}
-              </div>
-              {question.explanation && <p className="bank-explain">{question.explanation}</p>}
-            </>
-          )}
+          <QuestionPreview
+            question={question}
+            showAnswer={showAnswer}
+            onToggle={() => setShowAnswer((value) => !value)}
+          />
         </>
       )}
     </article>
+  )
+}
+
+function BankItem({
+  question,
+  onDelete,
+}: {
+  question: Question
+  onDelete: (id: number) => void
+}) {
+  const [showAnswer, setShowAnswer] = useState(false)
+
+  return (
+    <div className="bank-item">
+      <div className="bank-item-head">
+        <span className="type-chip">{TYPE_LABEL[question.type]}</span>
+        <span className="bank-stem">{question.stem}</span>
+        <button className="icon-btn small" title="删除此题" onClick={() => onDelete(question.id)}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+            <path d="M6 6l12 12M18 6L6 18" strokeLinecap="round" />
+          </svg>
+        </button>
+      </div>
+      <QuestionPreview
+        question={question}
+        showAnswer={showAnswer}
+        onToggle={() => setShowAnswer((value) => !value)}
+      />
+    </div>
   )
 }
 
@@ -446,6 +493,7 @@ export default function Workspace({
     setSubmitting(true)
     const failedIds: number[] = []
     let added = 0
+    let skipped = 0
     const single = items.length === 1 ? points.find((entry) => entry.id === items[0].pointId) : null
     const taskId = onTaskStart(
       single ? `为「${single.title}」出题` : `批量出题（${items.length} 个知识点）`,
@@ -465,12 +513,16 @@ export default function Workspace({
           total: items.length > 1 ? items.length : 0,
         })
         try {
-          const generated = await generateQuestionsForKP(point, item.counts)
-          if (!generated.length) {
+          const existing = [...questions, ...drafts]
+            .filter((entry) => entry.knowledge_point_id === point.id)
+            .map((entry) => entry.stem)
+          const result = await generateQuestionsForKP(point, item.counts, existing)
+          if (!result.questions.length) {
             failedIds.push(item.pointId)
             continue
           }
-          const rows: NewQuestion[] = generated.map((question) => ({
+          skipped += result.skipped
+          const rows: NewQuestion[] = result.questions.map((question) => ({
             document_id: doc.id,
             knowledge_point_id: point.id,
             type: question.type,
@@ -491,16 +543,20 @@ export default function Workspace({
       setQueue((prev) => prev.filter((item) => failedIds.includes(item.pointId)))
       onTaskFinish(taskId, added ? 'done' : 'error', added ? undefined : '没有生成出新题目')
 
+      const skipNote = skipped ? `，跳过 ${skipped} 道重复题` : ''
+
       if (single) {
         notify(
           added
-            ? `已为「${single.title}」生成 ${added} 道题，已放入出题文档。`
-            : '这次没有生成出新题目，可以调整题量再试。',
+            ? `已为「${single.title}」生成 ${added} 道题${skipNote}，已放入出题文档。`
+            : skipped
+              ? `这次生成的都是出过的题${skipNote}，换个知识点或调大题量再试。`
+              : '这次没有生成出新题目，可以调整题量再试。',
         )
       } else {
         notify(
           added
-            ? `生成 ${added} 道题，已放入出题文档，检查后再加入题库。${
+            ? `生成 ${added} 道题${skipNote}，已放入出题文档，检查后再加入题库。${
                 failedIds.length ? `另有 ${failedIds.length} 个知识点失败。` : ''
               }`
             : '这次没有生成出新题目，可以调整一下题量再试。',
@@ -1018,42 +1074,7 @@ export default function Workspace({
                     <div className="bank-group" key={group.point?.id ?? 'orphan'}>
                       <h4 className="bank-group-title">{group.point?.title || '综合'}</h4>
                       {group.items.map((question) => (
-                        <div className="bank-item" key={question.id}>
-                          <div className="bank-item-head">
-                            <span className="type-chip">{TYPE_LABEL[question.type]}</span>
-                            <span className="bank-stem">{question.stem}</span>
-                            <button
-                              className="icon-btn small"
-                              title="删除此题"
-                              onClick={() => removeQuestion(question.id)}
-                            >
-                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                                <path d="M6 6l12 12M18 6L6 18" strokeLinecap="round" />
-                              </svg>
-                            </button>
-                          </div>
-                          {question.type === 'choice' && (
-                            <ul className="bank-options">
-                              {question.options.map((option, oi) => (
-                                <li key={oi} className={LETTERS[oi] === question.answer ? 'right' : ''}>
-                                  <span>{LETTERS[oi]}</span>
-                                  {option}
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                          <div className="bank-answer">
-                            <span className="bank-answer-label">答案</span>
-                            {question.type === 'choice'
-                              ? `${question.answer}. ${
-                                  question.options[LETTERS.indexOf(question.answer)] || ''
-                                }`
-                              : question.answer}
-                          </div>
-                          {question.explanation && (
-                            <p className="bank-explain">{question.explanation}</p>
-                          )}
-                        </div>
+                        <BankItem key={question.id} question={question} onDelete={removeQuestion} />
                       ))}
                     </div>
                   ))}

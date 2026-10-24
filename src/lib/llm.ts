@@ -468,7 +468,34 @@ const QUESTION_SYSTEM =
   '你是一位资深命题人。你出的每一道题都必须能由给定材料原文直接支撑，' +
   '不得引入材料之外的知识，也不得靠常识补充细节。你只输出 JSON。'
 
-function buildQuestionPrompt(kp: RawKP, counts: QuestionCounts): string {
+/** 题干归一化：去掉空白与标点，只留实义字符用于比对 */
+function normalizeStem(stem: string): string {
+  return String(stem || '')
+    .toLowerCase()
+    .replace(/[\s，。、：；！？（）()【】\[\]"'“”‘’·,.:;!?\-—_/\\]/g, '')
+}
+
+/** 同一知识点下，与已出题目完全相同或高度重叠的都算重复 */
+function isDuplicateStem(stem: string, seen: Set<string>): boolean {
+  const key = normalizeStem(stem)
+  if (!key) return true
+  if (seen.has(key)) return true
+
+  for (const existing of seen) {
+    const shorter = Math.min(existing.length, key.length)
+    const longer = Math.max(existing.length, key.length)
+    if (shorter < 8 || longer === 0) continue
+    if (shorter / longer < 0.8) continue
+    if (existing.includes(key) || key.includes(existing)) return true
+  }
+  return false
+}
+
+function buildQuestionPrompt(
+  kp: RawKP,
+  counts: QuestionCounts,
+  existing: string[],
+): string {
   const parts: string[] = []
   if (counts.choice > 0) {
     parts.push(
@@ -486,6 +513,16 @@ function buildQuestionPrompt(kp: RawKP, counts: QuestionCounts): string {
     )
   }
 
+  const avoid = existing.length
+    ? `
+
+这个知识点已经出过下面这些题目，**不要重复或稍作改写再出一遍**（不要只改数字、换个说法、调换选项顺序）：
+${existing
+  .slice(0, 30)
+  .map((stem, index) => `${index + 1}. ${stem}`)
+  .join('\n')}`
+    : ''
+
   return `知识点：${kp.title}
 要点：${kp.summary || '（无）'}
 
@@ -495,7 +532,7 @@ ${kp.excerpts.join('\n\n')}
 """
 
 请基于以上材料出题：
-${parts.join('\n')}
+${parts.join('\n')}${avoid}
 
 输出格式（JSON）：
 {"questions":[
@@ -583,25 +620,40 @@ function normalizeOne(item: any, declaredType?: QuestionType): RawQuestion | nul
 export async function generateQuestionsForKP(
   kp: RawKP,
   counts: QuestionCounts,
-): Promise<RawQuestion[]> {
+  existing: string[] = [],
+): Promise<{ questions: RawQuestion[]; skipped: number }> {
   const total = counts.choice + counts.judge + counts.short
-  if (total <= 0) return []
+  if (total <= 0) return { questions: [], skipped: 0 }
 
   const data = await chatJSON({
     system: QUESTION_SYSTEM,
-    user: buildQuestionPrompt(kp, counts),
+    user: buildQuestionPrompt(kp, counts, existing),
     temperature: 0.7,
   })
 
   const list = Array.isArray(data?.questions) ? data.questions : []
-  const result: RawQuestion[] = []
+  const raw: RawQuestion[] = []
   for (const type of ['choice', 'judge', 'short'] as QuestionType[]) {
     const expected = counts[type]
     if (!expected) continue
     const subset = list.filter((q: any) => String(q?.type || '').toLowerCase() === type)
-    result.push(...normalizeQuestions(subset, type, expected))
+    raw.push(...normalizeQuestions(subset, type, expected))
   }
-  return result
+
+  const seen = new Set(existing.map(normalizeStem).filter(Boolean))
+  const questions: RawQuestion[] = []
+  let skipped = 0
+
+  for (const question of raw) {
+    if (isDuplicateStem(question.stem, seen)) {
+      skipped += 1
+      continue
+    }
+    seen.add(normalizeStem(question.stem))
+    questions.push(question)
+  }
+
+  return { questions, skipped }
 }
 
 /* ------------------------------------------------------------------ */
