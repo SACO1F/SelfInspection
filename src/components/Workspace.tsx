@@ -3,6 +3,7 @@ import type { Doc, DocKind, KnowledgePoint, Question, QuestionCounts } from '../
 import { TYPE_LABEL, LETTERS } from '../lib/types'
 import type { Repo, NewQuestion, QuestionPatch } from '../lib/repo'
 import { loadQueue, saveQueue, type QueueItem } from '../lib/queue'
+import type { TaskItem } from './TaskProgress'
 import { extractKnowledgePoints, generateQuestionsForKP, describeError } from '../lib/llm'
 import {
   buildSections,
@@ -21,6 +22,9 @@ interface Props {
   repo: Repo
   onBack: () => void
   onOpenSettings: () => void
+  onTaskStart: (title: string) => string
+  onTaskUpdate: (id: string, patch: Partial<TaskItem>) => void
+  onTaskFinish: (id: string, status: 'done' | 'error', error?: string) => void
   notify: (message: string) => void
 }
 
@@ -99,6 +103,7 @@ function DraftCard({
   onDelete: (id: number) => void
 }) {
   const [editing, setEditing] = useState(false)
+  const [showAnswer, setShowAnswer] = useState(false)
   const [stem, setStem] = useState(question.stem)
   const [options, setOptions] = useState<string[]>(question.options)
   const [answer, setAnswer] = useState(question.answer)
@@ -235,27 +240,50 @@ function DraftCard({
           {question.type === 'choice' && (
             <ul className="bank-options">
               {question.options.map((option, oi) => (
-                <li key={oi} className={LETTERS[oi] === question.answer ? 'right' : ''}>
+                <li
+                  key={oi}
+                  className={showAnswer && LETTERS[oi] === question.answer ? 'right' : ''}
+                >
                   <span>{LETTERS[oi]}</span>
                   {option}
                 </li>
               ))}
             </ul>
           )}
-          <div className="bank-answer">
-            <span className="bank-answer-label">答案</span>
-            {question.type === 'choice'
-              ? `${question.answer}. ${question.options[LETTERS.indexOf(question.answer)] || ''}`
-              : question.answer}
+
+          <div className="draft-reveal">
+            <button className="text-btn" onClick={() => setShowAnswer((value) => !value)}>
+              {showAnswer ? '隐藏答案' : '显示答案'}
+            </button>
           </div>
-          {question.explanation && <p className="bank-explain">{question.explanation}</p>}
+
+          {showAnswer && (
+            <>
+              <div className="bank-answer">
+                <span className="bank-answer-label">答案</span>
+                {question.type === 'choice'
+                  ? `${question.answer}. ${question.options[LETTERS.indexOf(question.answer)] || ''}`
+                  : question.answer}
+              </div>
+              {question.explanation && <p className="bank-explain">{question.explanation}</p>}
+            </>
+          )}
         </>
       )}
     </article>
   )
 }
 
-export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }: Props) {
+export default function Workspace({
+  doc,
+  repo,
+  onBack,
+  onOpenSettings,
+  onTaskStart,
+  onTaskUpdate,
+  onTaskFinish,
+  notify,
+}: Props) {
   const [kind, setKind] = useState<DocKind>(doc.kind)
   const [points, setPoints] = useState<KnowledgePoint[]>([])
   const [questions, setQuestions] = useState<Question[]>([])
@@ -264,9 +292,7 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<Tab>(doc.kind === 'questions' ? 'drafts' : 'points')
   const [activeId, setActiveId] = useState<number | null>(null)
-  const [progress, setProgress] = useState<{ label: string; done: number; total: number } | null>(
-    null,
-  )
+  const [busy, setBusy] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const [panel, setPanel] = useState<null | 'single' | 'all'>(null)
   const [counts, setCounts] = useState<QuestionCounts>(DEFAULT_COUNTS)
@@ -334,10 +360,11 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
       const confirmed = window.confirm('重新生成会删除现有知识点和与之关联的题目，确定继续吗？')
       if (!confirmed) return
     }
-    setProgress({ label: '正在通读资料并拆解知识点', done: 0, total: 0 })
+    setBusy(true)
+    const taskId = onTaskStart(`拆解「${doc.title}」的知识点`)
     try {
       const result = await extractKnowledgePoints(doc.content, (done, total) =>
-        setProgress({ label: '正在通读资料并拆解知识点', done, total }),
+        onTaskUpdate(taskId, { label: '正在拆解知识点', done, total }),
       )
       const created = await repo.replacePoints(doc.id, result.points)
       setPoints(created)
@@ -346,6 +373,7 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
       setQueue([])
       setActiveId(created[0]?.id ?? null)
       setTab('points')
+      onTaskFinish(taskId, 'done')
       notify(
         result.truncated
           ? `已生成 ${created.length} 个知识点。资料较长，本次只分析了前 ${Math.round(
@@ -354,9 +382,10 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
           : `已生成 ${created.length} 个知识点。`,
       )
     } catch (err) {
+      onTaskFinish(taskId, 'error', describeError(err))
       notify(describeError(err))
     } finally {
-      setProgress(null)
+      setBusy(false)
     }
   }
 
@@ -417,6 +446,10 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
     setSubmitting(true)
     const failedIds: number[] = []
     let added = 0
+    const single = items.length === 1 ? points.find((entry) => entry.id === items[0].pointId) : null
+    const taskId = onTaskStart(
+      single ? `为「${single.title}」出题` : `批量出题（${items.length} 个知识点）`,
+    )
 
     try {
       for (const [index, item] of items.entries()) {
@@ -426,7 +459,11 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
           continue
         }
 
-        setProgress({ label: `正在为「${point.title}」出题`, done: index, total: items.length })
+        onTaskUpdate(taskId, {
+          label: '正在出题',
+          done: index,
+          total: items.length > 1 ? items.length : 0,
+        })
         try {
           const generated = await generateQuestionsForKP(point, item.counts)
           if (!generated.length) {
@@ -452,12 +489,12 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
       }
 
       setQueue((prev) => prev.filter((item) => failedIds.includes(item.pointId)))
+      onTaskFinish(taskId, added ? 'done' : 'error', added ? undefined : '没有生成出新题目')
 
-      if (items.length === 1) {
-        const title = points.find((entry) => entry.id === items[0].pointId)?.title
+      if (single) {
         notify(
           added
-            ? `已为「${title}」生成 ${added} 道题，已放入出题文档。`
+            ? `已为「${single.title}」生成 ${added} 道题，已放入出题文档。`
             : '这次没有生成出新题目，可以调整题量再试。',
         )
       } else {
@@ -470,7 +507,6 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
         )
       }
     } finally {
-      setProgress(null)
       setSubmitting(false)
     }
   }
@@ -617,20 +653,6 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
         </div>
       </header>
 
-      {progress && (
-        <div className="progress-bar">
-          <div className="progress-inner">
-            <span className="spinner" />
-            <span className="progress-label">{progress.label}</span>
-            {progress.total > 0 && (
-              <span className="progress-count">
-                {progress.done}/{progress.total}
-              </span>
-            )}
-          </div>
-        </div>
-      )}
-
       <div className="ws-body">
         <aside className="ws-side">
           <div className="side-head">
@@ -641,7 +663,7 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
                 className="icon-btn small"
                 title="重新生成知识点"
                 onClick={generatePoints}
-                disabled={!!progress}
+                disabled={busy}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
                   <path d="M20 11a8 8 0 1 0-2.3 5.6M20 5v6h-6" strokeLinecap="round" strokeLinejoin="round" />
@@ -660,11 +682,11 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
             <div className="side-empty">
               <p>{kind === 'questions' ? '题库类资料不拆知识点。' : '还没有知识点。'}</p>
               {kind === 'questions' ? (
-                <button className="btn subtle block" onClick={switchToKnowledge} disabled={!!progress}>
+                <button className="btn subtle block" onClick={switchToKnowledge} disabled={busy}>
                   改为按知识点拆解
                 </button>
               ) : (
-                <button className="btn primary block" onClick={generatePoints} disabled={!!progress}>
+                <button className="btn primary block" onClick={generatePoints} disabled={busy}>
                   生成知识点
                 </button>
               )}
@@ -736,7 +758,7 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
                         setCounts(DEFAULT_COUNTS)
                         setPanel(panel === 'single' ? null : 'single')
                       }}
-                      disabled={!!progress}
+                      disabled={busy}
                     >
                       {queuedIds.has(activePoint.id) ? '调整出题量' : '加入出题文档'}
                     </button>
@@ -792,7 +814,7 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
                     <p className="empty-text">
                       题库类资料不拆知识点，抽出来的题目在「出题文档」里等你确认。如果你其实希望按知识点出题，可以改成知识内容重新拆解。
                     </p>
-                    <button className="btn primary" onClick={switchToKnowledge} disabled={!!progress}>
+                    <button className="btn primary" onClick={switchToKnowledge} disabled={busy}>
                       改为按知识点拆解
                     </button>
                   </>
@@ -802,7 +824,7 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
                     <p className="empty-text">
                       系统会通读整份资料，把内容归纳成若干可考察的知识点，并把原文中相关的段落挂在每个知识点下。
                     </p>
-                    <button className="btn primary" onClick={generatePoints} disabled={!!progress}>
+                    <button className="btn primary" onClick={generatePoints} disabled={busy}>
                       开始生成
                     </button>
                   </>
@@ -834,9 +856,9 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
                             ))}
                           </div>
                           <button
-                            className="btn subtle small"
+                            className="btn accent small"
                             onClick={() => generateOne(item)}
-                            disabled={submitting || !!progress || !point}
+                            disabled={submitting || busy || !point}
                           >
                             出题
                           </button>
@@ -860,7 +882,7 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
                     <button
                       className="btn primary"
                       onClick={generateFromQueue}
-                      disabled={submitting || !!progress}
+                      disabled={submitting || busy}
                     >
                       {submitting ? '生成中…' : `开始出题（${queue.length} 个知识点）`}
                     </button>
@@ -931,7 +953,7 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
                           setCounts(DEFAULT_COUNTS)
                           setPanel(panel === 'all' ? null : 'all')
                         }}
-                        disabled={!!progress || !points.length}
+                        disabled={busy || !points.length}
                       >
                         为全部知识点出题
                       </button>
@@ -967,7 +989,7 @@ export default function Workspace({ doc, repo, onBack, onOpenSettings, notify }:
                           setCounts(DEFAULT_COUNTS)
                           setPanel(panel === 'all' ? null : 'all')
                         }}
-                        disabled={!!progress || !points.length}
+                        disabled={busy || !points.length}
                       >
                         继续为全部知识点出题
                       </button>

@@ -682,46 +682,6 @@ textarea {
   flex-direction: column;
 }
 
-.progress-bar {
-  position: sticky;
-  top: 60px;
-  z-index: 15;
-  background: var(--accent-tint);
-  border-bottom: 1px solid #ecd6c8;
-}
-
-.progress-inner {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  max-width: 1180px;
-  margin: 0 auto;
-  padding: 9px 28px;
-  font-size: 12.5px;
-  color: var(--accent-dark);
-}
-
-.progress-count {
-  margin-left: auto;
-  font-variant-numeric: tabular-nums;
-  opacity: 0.75;
-}
-
-.spinner {
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  border: 1.6px solid rgba(201, 100, 66, 0.28);
-  border-top-color: var(--accent);
-  animation: spin 0.7s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 .ws-body {
   flex: 1;
   display: grid;
@@ -2010,6 +1970,21 @@ textarea {
   padding: 0 11px;
   border-radius: 7px;
   font-size: 12.5px;
+}
+
+.btn.accent {
+  background: var(--accent-tint);
+  border-color: #e6cebe;
+  color: var(--accent-dark);
+}
+
+.btn.accent:hover:not(:disabled) {
+  background: #f2ded0;
+  border-color: var(--accent);
+}
+
+.draft-reveal {
+  margin-top: 10px;
 }
 
 .draft-edit {

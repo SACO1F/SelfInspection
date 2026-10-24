@@ -97,9 +97,36 @@ export default function App() {
     setTasks((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)))
   }, [])
 
-  const dropTask = useCallback((id: string) => {
-    setTasks((prev) => prev.filter((item) => item.id !== id))
+  const startTask = useCallback((title: string) => {
+    const id = `t-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    setTasks((prev) => [
+      { id, title, label: '正在准备', done: 0, total: 0, status: 'working' },
+      ...prev,
+    ])
+    return id
   }, [])
+
+  const finishTask = useCallback(
+    (id: string, status: 'done' | 'error', error?: string) => {
+      setTasks((prev) =>
+        prev.map((item) =>
+          item.id === id
+            ? {
+                ...item,
+                status,
+                error,
+                label: status === 'done' ? '已完成' : '失败',
+              }
+            : item,
+        ),
+      )
+      window.setTimeout(
+        () => setTasks((prev) => prev.filter((item) => item.id !== id)),
+        status === 'done' ? 1600 : 6000,
+      )
+    },
+    [],
+  )
 
   useEffect(() => {
     if (location.hash === '#guest') {
@@ -229,13 +256,11 @@ export default function App() {
         }
       }
 
-      updateTask(taskId, { status: 'done', label: '已完成' })
-      window.setTimeout(() => dropTask(taskId), 1600)
+      finishTask(taskId, 'done')
       return { ...created, kind, content: parsed.text }
     } catch (error) {
       const message = (error as Error).message
-      updateTask(taskId, { status: 'error', label: '导入失败', error: message })
-      window.setTimeout(() => dropTask(taskId), 6000)
+      finishTask(taskId, 'error', message)
       notify(message)
       return null
     }
@@ -325,6 +350,9 @@ export default function App() {
           repo={repo}
           onBack={() => setActiveDoc(null)}
           onOpenSettings={openSettings}
+          onTaskStart={startTask}
+          onTaskUpdate={updateTask}
+          onTaskFinish={finishTask}
           notify={notify}
         />
       ) : (
