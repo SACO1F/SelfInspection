@@ -495,6 +495,8 @@ export default function Workspace({
     let added = 0
     let skipped = 0
     let rejected = 0
+    let conflicts = 0
+    let unsupported = 0
     const single = items.length === 1 ? points.find((entry) => entry.id === items[0].pointId) : null
     const taskId = onTaskStart(
       single ? `为「${single.title}」出题` : `批量出题（${items.length} 个知识点）`,
@@ -518,12 +520,14 @@ export default function Workspace({
             .filter((entry) => entry.knowledge_point_id === point.id)
             .map((entry) => entry.stem)
           const result = await generateQuestionsForKP(point, item.counts, existing)
+          skipped += result.skipped
+          rejected += result.rejected
+          conflicts += result.conflicts
+          unsupported += result.unsupported
           if (!result.questions.length) {
             failedIds.push(item.pointId)
             continue
           }
-          skipped += result.skipped
-          rejected += result.rejected
           const rows: NewQuestion[] = result.questions.map((question) => ({
             document_id: doc.id,
             knowledge_point_id: point.id,
@@ -546,25 +550,25 @@ export default function Workspace({
       onTaskFinish(taskId, added ? 'done' : 'error', added ? undefined : '没有生成出新题目')
 
       const notes: string[] = []
-      if (skipped) notes.push(`跳过 ${skipped} 道重复题`)
-      if (rejected) notes.push(`自检修正 ${rejected} 道`)
-      const skipNote = notes.length ? `，${notes.join('、')}` : ''
+      if (unsupported) notes.push(`${unsupported} 道找不到原文依据`)
+      if (conflicts) notes.push(`${conflicts} 道复核答案与标注不符`)
+      if (rejected) notes.push(`${rejected} 道自检不合格`)
+      if (skipped) notes.push(`${skipped} 道与已有题重复`)
+      const skipNote = notes.length ? `，剔除了${notes.join('、')}` : ''
 
       if (single) {
         notify(
           added
-            ? `已为「${single.title}」生成 ${added} 道题${skipNote}，已放入出题文档。`
-            : skipped
-              ? `这次生成的都是出过的题${skipNote}，换个知识点或调大题量再试。`
-              : '这次没有生成出新题目，可以调整题量再试。',
+            ? `已为「${single.title}」生成 ${added} 道题${skipNote}。`
+            : `这次没有可用的题目${skipNote}，可以稍后再试或调大题量。`,
         )
       } else {
         notify(
           added
-            ? `生成 ${added} 道题${skipNote}，已放入出题文档，检查后再加入题库。${
-                failedIds.length ? `另有 ${failedIds.length} 个知识点失败。` : ''
+            ? `生成 ${added} 道题${skipNote}。${
+                failedIds.length ? ` 另有 ${failedIds.length} 个知识点没出成。` : ''
               }`
-            : '这次没有生成出新题目，可以调整一下题量再试。',
+            : `这次没有可用的题目${skipNote}。`,
         )
       }
     } finally {

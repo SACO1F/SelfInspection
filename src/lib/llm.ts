@@ -487,6 +487,8 @@ export interface RawQuestion {
   options: string[]
   answer: string
   explanation: string
+  /** 支撑该题的原文片段，必须是原文逐字复制 */
+  evidence?: string
 }
 
 const QUESTION_SYSTEM =
@@ -516,12 +518,7 @@ function isDuplicateStem(stem: string, seen: Set<string>): boolean {
   return false
 }
 
-function buildQuestionPrompt(
-  kp: RawKP,
-  counts: QuestionCounts,
-  existing: string[],
-  feedback = '',
-): string {
+function buildQuestionPrompt(kp: RawKP, counts: QuestionCounts, existing: string[]): string {
   const parts: string[] = []
   if (counts.choice > 0) {
     parts.push(
@@ -558,20 +555,17 @@ ${kp.excerpts.join('\n\n')}
 """
 
 请基于以上材料出题：
-${parts.join('\n')}${avoid}${
-    feedback
-      ? `
+${parts.join('\n')}${avoid}
 
-上一版里有几道题被判不合格，这次务必避免同样的问题：
-${feedback}`
-      : ''
-  }
+每道题都必须附带 evidence：从上面【原文材料】里**逐字复制**的一段连续文字（不少于 15 字），
+必须能直接支撑该题的正确答案。不得改写、不得概括、不得拼接不相邻的句子。
+如果某道题在原文里找不到明确依据，就不要出这道题。
 
 输出格式（JSON）：
 {"questions":[
-{"type":"choice","stem":"题干","options":["选项内容1","选项内容2","选项内容3","选项内容4"],"answer":"B","explanation":"解析：说明正确答案的依据，以及其它选项错在哪里"},
-{"type":"judge","stem":"陈述句","options":[],"answer":"对","explanation":"解析"},
-{"type":"short","stem":"题干","options":[],"answer":"参考答案（分点作答，2-4 句）","explanation":"评分要点"}
+{"type":"choice","stem":"题干","options":["选项内容1","选项内容2","选项内容3","选项内容4"],"answer":"B","explanation":"解析：说明正确答案的依据，以及其它选项错在哪里","evidence":"原文逐字片段"},
+{"type":"judge","stem":"陈述句","options":[],"answer":"对","explanation":"解析","evidence":"原文逐字片段"},
+{"type":"short","stem":"题干","options":[],"answer":"参考答案（分点作答，2-4 句）","explanation":"评分要点","evidence":"原文逐字片段"}
 ]}
 
 注意：choice 的 answer 只能是一个大写选项字母；options 里不要写"A."这类前缀；所有题干不要编号。`
@@ -611,6 +605,7 @@ function normalizeOne(item: any, declaredType?: QuestionType): RawQuestion | nul
   if (!stem) return null
 
   const explanation = String(item?.explanation || '').trim()
+  const evidence = String(item?.evidence || '').trim()
   const rawOptions = Array.isArray(item?.options) ? item.options : []
   const rawType = String(item?.type || '').trim().toLowerCase()
 
@@ -636,32 +631,31 @@ function normalizeOne(item: any, declaredType?: QuestionType): RawQuestion | nul
     if (options.length < 3) return null
     const answer = normalizeAnswerLetter(item?.answer, options.length)
     if (!answer) return null
-    return { type, stem, options, answer, explanation }
+    return { type, stem, options, answer, explanation, evidence }
   }
 
   if (type === 'judge') {
     const answer = normalizeJudgeAnswer(item?.answer)
     if (!answer) return null
-    return { type, stem, options: [], answer, explanation }
+    return { type, stem, options: [], answer, explanation, evidence }
   }
 
   const answer = String(item?.answer || '').trim()
   if (!answer) return null
-  return { type, stem, options: [], answer, explanation }
+  return { type, stem, options: [], answer, explanation, evidence }
 }
 
 async function requestQuestions(
   kp: RawKP,
   counts: QuestionCounts,
   existing: string[],
-  feedback = '',
 ): Promise<RawQuestion[]> {
   const total = counts.choice + counts.judge + counts.short
   if (total <= 0) return []
 
   const data = await chatJSON({
     system: QUESTION_SYSTEM,
-    user: buildQuestionPrompt(kp, counts, existing, feedback),
+    user: buildQuestionPrompt(kp, counts, existing),
     temperature: 0.7,
   })
 
@@ -672,6 +666,10 @@ async function requestQuestions(
     if (!expected) continue
     const subset = list.filter((q: any) => String(q?.type || '').toLowerCase() === type)
     raw.push(...normalizeQuestions(subset, type, expected))
+  }
+
+  if (DEBUG_REVIEW && raw.length < list.length) {
+    console.log(`[命题自检] ${kp.title}：模型返回 ${list.length} 道，结构不合格丢弃 ${list.length - raw.length} 道`)
   }
   return raw
 }
@@ -732,70 +730,141 @@ ${JSON.stringify(payload, null, 2)}
     )
 }
 
-function countTypes(list: RawQuestion[]): QuestionCounts {
-  const counts: QuestionCounts = { choice: 0, judge: 0, short: 0 }
-  for (const question of list) counts[question.type] += 1
-  return counts
+/* ------------------------------------------------------------------ */
+/* 严格出题：原文依据 + 双盲复核 + 文本自检                             */
+/* ------------------------------------------------------------------ */
+
+function normalizeChoiceAnswer(value: string): string {
+  const match = String(value || '')
+    .trim()
+    .toUpperCase()
+    .match(/^[A-F]/)
+  return match ? match[0] : ''
 }
 
+function normalizeJudgeText(value: string): string {
+  const text = String(value || '').trim()
+  if (/^(对|正确|是|真|true|t|yes|y|√|✓)$/i.test(text)) return '对'
+  if (/^(错|错误|否|假|false|f|no|n|×|x|✗)$/i.test(text)) return '错'
+  return ''
+}
+
+/** 原文依据校验：evidence 必须逐字出现在知识点摘录中 */
+function matchesSource(kp: RawKP, question: RawQuestion): boolean {
+  const squeeze = (value: string) => String(value || '').replace(/\s+/g, '')
+  const evidence = squeeze(question.evidence || '')
+  if (evidence.length < 12) return false
+  return squeeze(kp.excerpts.join('')).includes(evidence)
+}
+
+/**
+ * 双盲复核：把标注答案去掉，只给题干和选项，让模型重新作答。
+ * 这是唯一能破除「自己出题自己审」相关性错误的环节。
+ */
+async function blindAnswers(kp: RawKP, questions: RawQuestion[]): Promise<Map<number, string>> {
+  const map = new Map<number, string>()
+  const targets = questions
+    .map((question, index) => ({ question, index }))
+    .filter((item) => item.question.type !== 'short')
+  if (!targets.length) return map
+
+  const payload = targets.map((item) => ({
+    index: item.index,
+    type: item.question.type,
+    stem: item.question.stem,
+    options: item.question.options,
+  }))
+
+  const data = await chatJSON({
+    system: '你是答题者。只输出 JSON，不做解释。',
+    user: `请仅依据下面的原文材料作答，不要揣测出题意图。
+
+原文材料：
+"""
+${kp.excerpts.join('\n\n')}
+"""
+
+题目：
+${JSON.stringify(payload, null, 2)}
+
+要求：
+- choice：answer 只能是一个大写选项字母，如 "B"
+- judge：answer 只能是 "对" 或 "错"
+- 每题都必须作答，不要留空
+
+输出 {"answers":[{"index":0,"answer":"B"}]}`,
+    temperature: 0,
+  })
+
+  const list = Array.isArray(data?.answers) ? data.answers : []
+  for (const item of list) {
+    const index = Number(item?.index)
+    if (!Number.isInteger(index)) continue
+    if (!targets.some((entry) => entry.index === index)) continue
+    map.set(index, String(item?.answer || '').trim())
+  }
+  return map
+}
+
+export interface GenerationStats {
+  questions: RawQuestion[]
+  skipped: number
+  rejected: number
+  conflicts: number
+  unsupported: number
+}
+
+/**
+ * 严格出题：出题 → 原文依据 → 双盲复核 → 文本自检 → 去重。
+ * 任何一环不过的题直接剔除，不重出——宁可少出，不可出错。
+ */
 export async function generateQuestionsForKP(
   kp: RawKP,
   counts: QuestionCounts,
   existing: string[] = [],
-): Promise<{ questions: RawQuestion[]; skipped: number; rejected: number }> {
+): Promise<GenerationStats> {
   const total = counts.choice + counts.judge + counts.short
-  if (total <= 0) return { questions: [], skipped: 0, rejected: 0 }
+  if (total <= 0) {
+    return { questions: [], skipped: 0, rejected: 0, conflicts: 0, unsupported: 0 }
+  }
 
-  const first = await requestQuestions(kp, counts, existing)
+  const generated = await requestQuestions(kp, counts, existing)
 
+  // 1. 原文依据（确定性校验，不依赖模型判断）
+  const supported = generated.filter((question) => matchesSource(kp, question))
+  const unsupported = generated.length - supported.length
+
+  // 2. 双盲复核（独立采样，与标注答案比对）
+  const blind = await blindAnswers(kp, supported)
+  const consistent = supported.filter((question, index) => {
+    if (question.type === 'short') return true
+    const answered = blind.get(index)
+    if (!answered) return false
+    if (question.type === 'choice') {
+      return normalizeChoiceAnswer(answered) === normalizeChoiceAnswer(question.answer)
+    }
+    return normalizeJudgeText(answered) === normalizeJudgeText(question.answer)
+  })
+  const conflicts = supported.length - consistent.length
+
+  // 3. 文本自检（同一模型，补双盲覆盖不到的问题；失败不阻塞）
   let issues: ReviewIssue[] = []
   try {
-    issues = await reviewQuestions(kp, first)
+    issues = await reviewQuestions(kp, consistent)
   } catch (error) {
-    if (DEBUG_REVIEW) console.warn('[命题自检] 审核调用失败，已跳过审核：', error)
+    if (DEBUG_REVIEW) console.warn('[命题自检] 审核调用失败，已跳过文本自检：', error)
     issues = []
   }
 
   const badIndex = new Set(issues.map((issue) => issue.index))
-  const good = first.filter((_, index) => !badIndex.has(index))
+  const clean = consistent.filter((_, index) => !badIndex.has(index))
 
-  if (DEBUG_REVIEW) {
-    if (issues.length) {
-      console.groupCollapsed(
-        `[命题自检] ${kp.title}：${first.length} 题中 ${issues.length} 道不合格`,
-      )
-      for (const issue of issues) {
-        const stem = first[issue.index]?.stem || '（未知题目）'
-        const answer = first[issue.index]?.answer || ''
-        console.log(
-          `#${issue.index + 1} ${issue.reason || '未说明原因'}\n  题干：${stem}\n  标注答案：${answer}`,
-        )
-      }
-      console.groupEnd()
-    } else {
-      console.log(`[命题自检] ${kp.title}：${first.length} 题全部通过`)
-    }
-  }
-
-  let repaired: RawQuestion[] = []
-  if (issues.length) {
-    const retryCounts = countTypes(first.filter((_, index) => badIndex.has(index)))
-    const feedback = issues
-      .slice(0, 6)
-      .map((issue) => `第 ${issue.index + 1} 题：${issue.reason || '不合格'}`)
-      .join('\n')
-    try {
-      repaired = await requestQuestions(kp, retryCounts, existing, feedback)
-    } catch {
-      repaired = []
-    }
-  }
-
+  // 4. 去重
   const seen = new Set(existing.map(normalizeStem).filter(Boolean))
   const questions: RawQuestion[] = []
   let skipped = 0
 
-  for (const question of [...good, ...repaired]) {
+  for (const question of clean) {
     if (isDuplicateStem(question.stem, seen)) {
       skipped += 1
       continue
@@ -805,12 +874,21 @@ export async function generateQuestionsForKP(
   }
 
   if (DEBUG_REVIEW) {
-    console.log(
-      `[命题自检] ${kp.title}：出 ${first.length} → 拦下 ${issues.length} → 重出 ${repaired.length} → 保留 ${questions.length}（重复 ${skipped}）`,
+    console.groupCollapsed(
+      `[命题自检] ${kp.title}：出 ${generated.length} → 保留 ${questions.length}`,
     )
+    console.log(
+      `无原文依据 ${unsupported}｜双盲答案不一致 ${conflicts}｜文本自检不合格 ${issues.length}｜重复 ${skipped}`,
+    )
+    for (const issue of issues) {
+      console.log(
+        `自检 #${issue.index + 1} ${issue.reason || '未说明原因'}\n  题干：${consistent[issue.index]?.stem || ''}`,
+      )
+    }
+    console.groupEnd()
   }
 
-  return { questions, skipped, rejected: issues.length }
+  return { questions, skipped, rejected: issues.length, conflicts, unsupported }
 }
 
 /* ------------------------------------------------------------------ */
