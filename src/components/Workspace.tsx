@@ -494,6 +494,7 @@ export default function Workspace({
     const failedIds: number[] = []
     let added = 0
     let skipped = 0
+    let rejected = 0
     const single = items.length === 1 ? points.find((entry) => entry.id === items[0].pointId) : null
     const taskId = onTaskStart(
       single ? `为「${single.title}」出题` : `批量出题（${items.length} 个知识点）`,
@@ -522,6 +523,7 @@ export default function Workspace({
             continue
           }
           skipped += result.skipped
+          rejected += result.rejected
           const rows: NewQuestion[] = result.questions.map((question) => ({
             document_id: doc.id,
             knowledge_point_id: point.id,
@@ -543,7 +545,10 @@ export default function Workspace({
       setQueue((prev) => prev.filter((item) => failedIds.includes(item.pointId)))
       onTaskFinish(taskId, added ? 'done' : 'error', added ? undefined : '没有生成出新题目')
 
-      const skipNote = skipped ? `，跳过 ${skipped} 道重复题` : ''
+      const notes: string[] = []
+      if (skipped) notes.push(`跳过 ${skipped} 道重复题`)
+      if (rejected) notes.push(`自检修正 ${rejected} 道`)
+      const skipNote = notes.length ? `，${notes.join('、')}` : ''
 
       if (single) {
         notify(
@@ -668,7 +673,9 @@ export default function Workspace({
           </button>
           <Logo size={20} />
           <span className="doc-head-title">{doc.title}</span>
-          {kind === 'questions' && <span className="kind-chip">题库</span>}
+          {kind !== 'knowledge' && (
+            <span className="kind-chip">{kind === 'mixed' ? '讲义+题库' : '题库'}</span>
+          )}
         </div>
         <div className="topbar-right">
           <div className="menu-wrap">

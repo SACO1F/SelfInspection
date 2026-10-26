@@ -4,7 +4,7 @@ import type { Doc, DocKind } from './lib/types'
 import { cloudRepo, guestRepo, type Repo } from './lib/repo'
 import {
   describeError,
-  detectDocKind,
+  routeDocument,
   extractExistingQuestions,
   extractKnowledgePoints,
 } from './lib/llm'
@@ -193,13 +193,11 @@ export default function App() {
       updateTask(taskId, { label: '正在解析文件', done: 0, total: 0 })
       const parsed = await parseFile(file)
 
-      updateTask(taskId, { label: '正在识别资料类型', done: 0, total: 0 })
-      let kind: DocKind = 'knowledge'
-      try {
-        kind = await detectDocKind(parsed.text)
-      } catch {
-        kind = 'knowledge'
-      }
+      updateTask(taskId, { label: '正在识别资料结构', done: 0, total: 0 })
+      const routed = await routeDocument(parsed.text)
+      const knowledgeChunks = routed.chunks.filter((_, index) => routed.kinds[index] === 'knowledge')
+      const questionChunks = routed.chunks.filter((_, index) => routed.kinds[index] === 'questions')
+      let kind: DocKind = routed.kind
 
       updateTask(taskId, { label: '正在保存资料', done: 0, total: 0 })
       const created = await repo.createDocument({
@@ -211,13 +209,16 @@ export default function App() {
       updateTask(taskId, { docId: created.id })
       await loadDocs(true)
 
-      if (kind === 'questions') {
+      const notes: string[] = []
+      let importedQuestions = 0
+
+      if (questionChunks.length) {
         try {
-          const result = await extractExistingQuestions(parsed.text, (done, total) =>
+          const questions = await extractExistingQuestions(questionChunks, (done, total) =>
             updateTask(taskId, { label: '正在抽取已有题目', done, total }),
           )
           await repo.addQuestions(
-            result.questions.map((question) => ({
+            questions.map((question) => ({
               document_id: created.id,
               knowledge_point_id: null,
               type: question.type,
@@ -228,34 +229,37 @@ export default function App() {
               status: 'draft' as const,
             })),
           )
-          notify(
-            `识别为「已有题库」，抽到 ${result.questions.length} 道题，检查确认后即可做题。${
-              result.truncated ? ' 资料较长，只分析了前面部分。' : ''
-            }`,
-          )
+          importedQuestions = questions.length
+          notes.push(`抽到 ${questions.length} 道已有题目`)
         } catch (error) {
-          kind = 'knowledge'
-          await repo.setDocumentKind(created.id, 'knowledge')
-          notify(`${describeError(error)} 已改为按知识内容处理。`)
+          notes.push(describeError(error))
         }
       }
 
-      if (kind === 'knowledge') {
+      // 纯题库文档一题都没抽出来时，退回知识内容处理，避免留下一个空壳
+      if (kind === 'questions' && importedQuestions === 0) {
+        kind = 'knowledge'
+        await repo.setDocumentKind(created.id, 'knowledge')
+      }
+
+      // 纯题库文档只抽题，避免被误判为知识的片段拆出无意义知识点
+      const wantKnowledge = kind !== 'questions' && knowledgeChunks.length > 0
+
+      if (wantKnowledge) {
         try {
-          const result = await extractKnowledgePoints(parsed.text, (done, total) =>
+          const points = await extractKnowledgePoints(knowledgeChunks, (done, total) =>
             updateTask(taskId, { label: '正在拆解知识点', done, total }),
           )
-          await repo.replacePoints(created.id, result.points)
-          notify(
-            `已自动拆出 ${result.points.length} 个知识点。${
-              result.truncated ? ' 资料较长，只分析了前面部分。' : ''
-            }`,
-          )
+          await repo.replacePoints(created.id, points)
+          notes.push(`拆出 ${points.length} 个知识点`)
         } catch (error) {
-          notify(`${describeError(error)} 可以进入资料后手动重试。`)
+          notes.push(describeError(error))
         }
       }
 
+      if (routed.truncated) notes.push('资料较长，只分析了前面部分')
+
+      notify(notes.length ? `${notes.join('；')}。` : '资料已导入。')
       finishTask(taskId, 'done')
       return { ...created, kind, content: parsed.text }
     } catch (error) {

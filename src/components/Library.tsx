@@ -153,7 +153,11 @@ export default function Library({
                       <div className="doc-tag">
                         {SOURCE_LABEL[doc.source_type] || doc.source_type}
                       </div>
-                      {doc.kind === 'questions' && <div className="doc-tag accent">题库</div>}
+                      {doc.kind !== 'knowledge' && (
+                        <div className="doc-tag accent">
+                          {doc.kind === 'mixed' ? '讲义+题库' : '题库'}
+                        </div>
+                      )}
                     </div>
                     <h3 className="doc-title">{doc.title}</h3>
                     <p className="doc-meta">

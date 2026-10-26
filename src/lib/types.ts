@@ -1,7 +1,7 @@
 export type QuestionType = 'choice' | 'judge' | 'short'
 
-/** knowledge = 知识内容，需要先拆知识点；questions = 已整理好的题库，直接抽取题目 */
-export type DocKind = 'knowledge' | 'questions'
+/** knowledge = 纯知识内容；questions = 纯题库；mixed = 既有讲义又有题目 */
+export type DocKind = 'knowledge' | 'questions' | 'mixed'
 
 export type QuestionStatus = 'draft' | 'confirmed'
 

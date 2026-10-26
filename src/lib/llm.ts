@@ -181,7 +181,12 @@ async function runPool<T, R>(
 /* 文本分块                                                            */
 /* ------------------------------------------------------------------ */
 
-function chunkText(text: string): string[] {
+export interface Chunked {
+  chunks: string[]
+  truncated: boolean
+}
+
+export function splitChunks(text: string): Chunked {
   const paragraphs = text.split(/\n{2,}/)
   const chunks: string[] = []
   let buffer = ''
@@ -205,7 +210,9 @@ function chunkText(text: string): string[] {
     }
   }
   if (buffer.trim()) chunks.push(buffer.trim())
-  return chunks.filter(Boolean)
+
+  const all = chunks.filter(Boolean)
+  return { chunks: all.slice(0, MAX_CHUNKS), truncated: all.length > MAX_CHUNKS }
 }
 
 /* ------------------------------------------------------------------ */
@@ -216,12 +223,6 @@ export interface RawKP {
   title: string
   summary: string
   excerpts: string[]
-}
-
-export interface ExtractResult {
-  points: RawKP[]
-  truncated: boolean
-  analyzedChars: number
 }
 
 const EXTRACT_SYSTEM =
@@ -247,12 +248,10 @@ ${chunk}
 }
 
 export async function extractKnowledgePoints(
-  text: string,
+  chunks: string[],
   onProgress?: (done: number, total: number) => void,
-): Promise<ExtractResult> {
-  const allChunks = chunkText(text)
-  const truncated = allChunks.length > MAX_CHUNKS
-  const chunks = allChunks.slice(0, MAX_CHUNKS)
+): Promise<RawKP[]> {
+  if (!chunks.length) return []
 
   let done = 0
   let firstError: any = null
@@ -288,8 +287,7 @@ export async function extractKnowledgePoints(
     throw firstError || new Error('没有从资料中抽取到知识点，请确认文档内容是否为正文。')
   }
 
-  const analyzedChars = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
-  return { points: mergeKnowledgePoints(flat), truncated, analyzedChars }
+  return mergeKnowledgePoints(flat)
 }
 
 function normalizeKey(title: string): string {
@@ -341,35 +339,71 @@ function mergeKnowledgePoints(list: RawKP[]): RawKP[] {
 }
 
 /* ------------------------------------------------------------------ */
-/* 资料形态判别：知识内容 / 已有题库                                    */
+/* 资料结构路由：逐块判断是知识、题目还是无实质内容                      */
 /* ------------------------------------------------------------------ */
 
-function buildSample(text: string): string {
-  if (text.length <= 2600) return text
-  const size = 850
-  const middle = Math.floor(text.length / 2)
-  return [text.slice(0, size), text.slice(middle, middle + size), text.slice(-size)].join(
-    '\n\n……\n\n',
-  )
+export type ChunkKind = 'knowledge' | 'questions' | 'empty'
+
+export interface RoutedDoc {
+  chunks: string[]
+  kinds: ChunkKind[]
+  kind: DocKind
+  truncated: boolean
 }
 
-export async function detectDocKind(text: string): Promise<DocKind> {
-  const data = await chatJSON({
-    system: '你是文档形态判别助手。只输出 JSON，不做解释。',
-    user: `判断这份资料的主体形态属于哪一类：
+const ROUTE_SYSTEM = '你是文档结构判别助手。只输出 JSON，不做解释。'
 
-- "questions"：资料本身在罗列题目（选择、判断、问答、简答、名词解释、材料分析等），通常带有题号、"（　）"、"答："、"参考答案"等标记，并配有答案。
-- "knowledge"：连续叙述的知识内容（教材、讲义、笔记、整理稿）。即使末尾附带少量练习题，主体仍是知识阐述。
+function buildRoutePrompt(chunks: string[]): string {
+  const snippets = chunks
+    .map((chunk, index) => `【片段 ${index + 1}】\n${chunk.slice(0, 400)}`)
+    .join('\n\n')
 
-资料片段：
-"""
-${buildSample(text)}
-"""
+  return `下面是一份资料按顺序切成的 ${chunks.length} 个片段，每个片段只截取了开头。
 
-只输出：{"kind":"questions"} 或 {"kind":"knowledge"}`,
-    temperature: 0,
-  })
-  return data?.kind === 'questions' ? 'questions' : 'knowledge'
+请逐段判断它的主要内容属于哪一类：
+- "knowledge"：在阐述知识（定义、原理、推导、讲义、笔记）
+- "questions"：在罗列题目（题号、"（　）"、"答："、"参考答案"等）
+- "empty"：目录、扉页、版权页、页码、参考文献等没有考察价值的内容
+
+${snippets}
+
+只输出：{"kinds":["knowledge","questions",...]}
+数组长度必须正好是 ${chunks.length}，顺序与片段一一对应。`
+}
+
+/**
+ * 把资料切块并逐块判定类型。
+ * 混合文档（前半讲义、后半题库）会同时出现 knowledge 与 questions。
+ */
+export async function routeDocument(text: string): Promise<RoutedDoc> {
+  const { chunks, truncated } = splitChunks(text)
+  if (!chunks.length) {
+    return { chunks: [], kinds: [], kind: 'knowledge', truncated: false }
+  }
+
+  let kinds: ChunkKind[] = []
+
+  try {
+    const data = await chatJSON({
+      system: ROUTE_SYSTEM,
+      user: buildRoutePrompt(chunks),
+      temperature: 0,
+    })
+    const raw = Array.isArray(data?.kinds) ? data.kinds : []
+    kinds = chunks.map((_, index) => {
+      const value = String(raw[index] || '').toLowerCase()
+      if (value === 'questions' || value === 'empty') return value
+      return 'knowledge'
+    })
+  } catch {
+    kinds = chunks.map(() => 'knowledge' as ChunkKind)
+  }
+
+  const hasKnowledge = kinds.includes('knowledge')
+  const hasQuestions = kinds.includes('questions')
+  const kind: DocKind = hasKnowledge && hasQuestions ? 'mixed' : hasQuestions ? 'questions' : 'knowledge'
+
+  return { chunks, kinds, kind, truncated }
 }
 
 /* ------------------------------------------------------------------ */
@@ -403,19 +437,11 @@ ${chunk}
 """`
 }
 
-export interface ExtractQuestionResult {
-  questions: RawQuestion[]
-  truncated: boolean
-  analyzedChars: number
-}
-
 export async function extractExistingQuestions(
-  text: string,
+  chunks: string[],
   onProgress?: (done: number, total: number) => void,
-): Promise<ExtractQuestionResult> {
-  const allChunks = chunkText(text)
-  const truncated = allChunks.length > MAX_CHUNKS
-  const chunks = allChunks.slice(0, MAX_CHUNKS)
+): Promise<RawQuestion[]> {
+  if (!chunks.length) return []
 
   let done = 0
   let firstError: any = null
@@ -445,11 +471,7 @@ export async function extractExistingQuestions(
     throw firstError || new Error('没有从这份资料里识别出题目，可能需要按知识内容处理。')
   }
 
-  return {
-    questions: flat,
-    truncated,
-    analyzedChars: chunks.reduce((sum, chunk) => sum + chunk.length, 0),
-  }
+  return flat
 }
 
 /* ------------------------------------------------------------------ */
@@ -495,6 +517,7 @@ function buildQuestionPrompt(
   kp: RawKP,
   counts: QuestionCounts,
   existing: string[],
+  feedback = '',
 ): string {
   const parts: string[] = []
   if (counts.choice > 0) {
@@ -532,7 +555,14 @@ ${kp.excerpts.join('\n\n')}
 """
 
 请基于以上材料出题：
-${parts.join('\n')}${avoid}
+${parts.join('\n')}${avoid}${
+    feedback
+      ? `
+
+上一版里有几道题被判不合格，这次务必避免同样的问题：
+${feedback}`
+      : ''
+  }
 
 输出格式（JSON）：
 {"questions":[
@@ -617,17 +647,18 @@ function normalizeOne(item: any, declaredType?: QuestionType): RawQuestion | nul
   return { type, stem, options: [], answer, explanation }
 }
 
-export async function generateQuestionsForKP(
+async function requestQuestions(
   kp: RawKP,
   counts: QuestionCounts,
-  existing: string[] = [],
-): Promise<{ questions: RawQuestion[]; skipped: number }> {
+  existing: string[],
+  feedback = '',
+): Promise<RawQuestion[]> {
   const total = counts.choice + counts.judge + counts.short
-  if (total <= 0) return { questions: [], skipped: 0 }
+  if (total <= 0) return []
 
   const data = await chatJSON({
     system: QUESTION_SYSTEM,
-    user: buildQuestionPrompt(kp, counts, existing),
+    user: buildQuestionPrompt(kp, counts, existing, feedback),
     temperature: 0.7,
   })
 
@@ -639,12 +670,107 @@ export async function generateQuestionsForKP(
     const subset = list.filter((q: any) => String(q?.type || '').toLowerCase() === type)
     raw.push(...normalizeQuestions(subset, type, expected))
   }
+  return raw
+}
+
+const REVIEW_SYSTEM = '你是严谨的命题审核员，只挑真正不能用的题。只输出 JSON，不做解释。'
+
+interface ReviewIssue {
+  index: number
+  reason: string
+}
+
+/** 拿题干和答案回原文核验，返回不合格题目的下标与原因 */
+async function reviewQuestions(kp: RawKP, questions: RawQuestion[]): Promise<ReviewIssue[]> {
+  if (!questions.length) return []
+
+  const payload = questions.map((question, index) => ({
+    index,
+    type: question.type,
+    stem: question.stem,
+    options: question.options,
+    answer: question.answer,
+  }))
+
+  const data = await chatJSON({
+    system: REVIEW_SYSTEM,
+    user: `知识点：${kp.title}
+
+原文材料（唯一事实依据）：
+"""
+${kp.excerpts.join('\n\n')}
+"""
+
+待审核的题目：
+${JSON.stringify(payload, null, 2)}
+
+逐题检查，只挑出**确实有问题**的题，不要吹毛求疵：
+1. 题干里的术语、事实、数据必须能在原文中找到依据，不能凭空捏造。
+2. 标注的答案必须唯一，且确实能由原文推出。
+3. 选择题的干扰项要合理：不能出现两个正确答案，不能有"以上都对""都不对"这类凑数项。
+4. 题干不能空泛到无法作答，也不能与该知识点无关。
+
+输出 {"bad":[{"index":0,"reason":"简短说明"}]}；全部合格则输出 {"bad":[]}`,
+    temperature: 0,
+  })
+
+  const list = Array.isArray(data?.bad) ? data.bad : []
+  return list
+    .map((item: any) => ({
+      index: Number(item?.index),
+      reason: String(item?.reason || '').trim(),
+    }))
+    .filter(
+      (item: ReviewIssue) =>
+        Number.isInteger(item.index) && item.index >= 0 && item.index < questions.length,
+    )
+}
+
+function countTypes(list: RawQuestion[]): QuestionCounts {
+  const counts: QuestionCounts = { choice: 0, judge: 0, short: 0 }
+  for (const question of list) counts[question.type] += 1
+  return counts
+}
+
+export async function generateQuestionsForKP(
+  kp: RawKP,
+  counts: QuestionCounts,
+  existing: string[] = [],
+): Promise<{ questions: RawQuestion[]; skipped: number; rejected: number }> {
+  const total = counts.choice + counts.judge + counts.short
+  if (total <= 0) return { questions: [], skipped: 0, rejected: 0 }
+
+  const first = await requestQuestions(kp, counts, existing)
+
+  let issues: ReviewIssue[] = []
+  try {
+    issues = await reviewQuestions(kp, first)
+  } catch {
+    issues = []
+  }
+
+  const badIndex = new Set(issues.map((issue) => issue.index))
+  const good = first.filter((_, index) => !badIndex.has(index))
+
+  let repaired: RawQuestion[] = []
+  if (issues.length) {
+    const retryCounts = countTypes(first.filter((_, index) => badIndex.has(index)))
+    const feedback = issues
+      .slice(0, 6)
+      .map((issue) => `第 ${issue.index + 1} 题：${issue.reason || '不合格'}`)
+      .join('\n')
+    try {
+      repaired = await requestQuestions(kp, retryCounts, existing, feedback)
+    } catch {
+      repaired = []
+    }
+  }
 
   const seen = new Set(existing.map(normalizeStem).filter(Boolean))
   const questions: RawQuestion[] = []
   let skipped = 0
 
-  for (const question of raw) {
+  for (const question of [...good, ...repaired]) {
     if (isDuplicateStem(question.stem, seen)) {
       skipped += 1
       continue
@@ -653,7 +779,7 @@ export async function generateQuestionsForKP(
     questions.push(question)
   }
 
-  return { questions, skipped }
+  return { questions, skipped, rejected: issues.length }
 }
 
 /* ------------------------------------------------------------------ */
