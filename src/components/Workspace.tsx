@@ -101,6 +101,8 @@ function QuestionPreview({
   showAnswer: boolean
   onToggle: () => void
 }) {
+  const [showEvidence, setShowEvidence] = useState(false)
+
   return (
     <>
       {question.type === 'choice' && (
@@ -118,7 +120,16 @@ function QuestionPreview({
         <button className="text-btn" onClick={onToggle}>
           {showAnswer ? '隐藏答案' : '显示答案'}
         </button>
+        {question.evidence ? (
+          <button className="text-btn" onClick={() => setShowEvidence((value) => !value)}>
+            {showEvidence ? '收起依据' : '查看原文依据'}
+          </button>
+        ) : null}
       </div>
+
+      {showEvidence && question.evidence ? (
+        <blockquote className="evidence-block">{question.evidence}</blockquote>
+      ) : null}
 
       {showAnswer && (
         <>
@@ -536,6 +547,7 @@ export default function Workspace({
             options: question.options,
             answer: question.answer,
             explanation: question.explanation,
+            evidence: question.evidence || '',
             status: 'draft',
           }))
           const created = await repo.addQuestions(rows)

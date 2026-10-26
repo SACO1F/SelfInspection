@@ -1984,7 +1984,21 @@ textarea {
 }
 
 .draft-reveal {
+  display: flex;
+  align-items: center;
+  gap: 14px;
   margin-top: 10px;
+}
+
+.evidence-block {
+  margin: 10px 0 0;
+  padding: 10px 13px;
+  border-left: 2px solid var(--line-2);
+  border-radius: 0 6px 6px 0;
+  background: var(--surface-soft);
+  font-size: 12.5px;
+  line-height: 1.8;
+  color: var(--ink-2);
 }
 
 .draft-edit {

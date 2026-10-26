@@ -33,6 +33,8 @@ export interface Question {
   answer: string
   explanation: string
   status: QuestionStatus
+  /** 支撑该题的原文片段，用于溯源 */
+  evidence: string
 }
 
 export interface QuestionCounts {

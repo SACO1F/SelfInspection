@@ -226,6 +226,7 @@ export default function App() {
               options: question.options,
               answer: question.answer,
               explanation: question.explanation,
+              evidence: question.evidence || '',
               status: 'draft' as const,
             })),
           )

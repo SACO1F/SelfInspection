@@ -57,6 +57,7 @@ export function normalizeQuestion(row: any): Question {
     answer: row.answer,
     explanation: row.explanation || '',
     status: row.status === 'draft' ? 'draft' : 'confirmed',
+    evidence: row.evidence || '',
   }
 }
 
@@ -70,6 +71,7 @@ function toPayload(row: NewQuestion) {
     answer: row.answer,
     explanation: row.explanation,
     status: row.status,
+    evidence: row.evidence,
   }
 }
 

@@ -489,6 +489,8 @@ export interface RawQuestion {
   explanation: string
   /** 支撑该题的原文片段，必须是原文逐字复制 */
   evidence?: string
+  /** 解答题的评分要点，用于和盲答结果比对 */
+  keyPoints?: string[]
 }
 
 const QUESTION_SYSTEM =
@@ -532,7 +534,7 @@ function buildQuestionPrompt(kp: RawKP, counts: QuestionCounts, existing: string
   }
   if (counts.short > 0) {
     parts.push(
-      `- 解答题 ${counts.short} 道：需要 2-4 句话作答，考察理解、因果或步骤，不要考原文背诵。`,
+      `- 解答题 ${counts.short} 道：需要 2-4 句话作答，考察理解、因果或步骤，不要考原文背诵。同时给出 keyPoints（3-5 条评分要点，每条一句话），用于核对答案是否答到了点上。`,
     )
   }
 
@@ -565,7 +567,7 @@ ${parts.join('\n')}${avoid}
 {"questions":[
 {"type":"choice","stem":"题干","options":["选项内容1","选项内容2","选项内容3","选项内容4"],"answer":"B","explanation":"解析：说明正确答案的依据，以及其它选项错在哪里","evidence":"原文逐字片段"},
 {"type":"judge","stem":"陈述句","options":[],"answer":"对","explanation":"解析","evidence":"原文逐字片段"},
-{"type":"short","stem":"题干","options":[],"answer":"参考答案（分点作答，2-4 句）","explanation":"评分要点","evidence":"原文逐字片段"}
+{"type":"short","stem":"题干","options":[],"answer":"参考答案（分点作答，2-4 句）","explanation":"评分要点","evidence":"原文逐字片段","keyPoints":["要点1","要点2","要点3"]}
 ]}
 
 注意：choice 的 answer 只能是一个大写选项字母；options 里不要写"A."这类前缀；所有题干不要编号。`
@@ -642,7 +644,10 @@ function normalizeOne(item: any, declaredType?: QuestionType): RawQuestion | nul
 
   const answer = String(item?.answer || '').trim()
   if (!answer) return null
-  return { type, stem, options: [], answer, explanation, evidence }
+  const keyPoints = Array.isArray(item?.keyPoints)
+    ? item.keyPoints.map((point: any) => String(point || '').trim()).filter(Boolean)
+    : []
+  return { type, stem, options: [], answer, explanation, evidence, keyPoints }
 }
 
 async function requestQuestions(
@@ -757,22 +762,25 @@ function matchesSource(kp: RawKP, question: RawQuestion): boolean {
   return squeeze(kp.excerpts.join('')).includes(evidence)
 }
 
+interface BlindResult {
+  answers: Map<number, string>
+  points: Map<number, string[]>
+}
+
 /**
  * 双盲复核：把标注答案去掉，只给题干和选项，让模型重新作答。
  * 这是唯一能破除「自己出题自己审」相关性错误的环节。
  */
-async function blindAnswers(kp: RawKP, questions: RawQuestion[]): Promise<Map<number, string>> {
-  const map = new Map<number, string>()
-  const targets = questions
-    .map((question, index) => ({ question, index }))
-    .filter((item) => item.question.type !== 'short')
-  if (!targets.length) return map
+async function blindAnswers(kp: RawKP, questions: RawQuestion[]): Promise<BlindResult> {
+  const answers = new Map<number, string>()
+  const points = new Map<number, string[]>()
+  if (!questions.length) return { answers, points }
 
-  const payload = targets.map((item) => ({
-    index: item.index,
-    type: item.question.type,
-    stem: item.question.stem,
-    options: item.question.options,
+  const payload = questions.map((question, index) => ({
+    index,
+    type: question.type,
+    stem: question.stem,
+    options: question.options,
   }))
 
   const data = await chatJSON({
@@ -790,20 +798,67 @@ ${JSON.stringify(payload, null, 2)}
 要求：
 - choice：answer 只能是一个大写选项字母，如 "B"
 - judge：answer 只能是 "对" 或 "错"
+- short：answer 用 2-4 句作答，同时给出 points（3-5 条要点，每条一句话）
 - 每题都必须作答，不要留空
 
-输出 {"answers":[{"index":0,"answer":"B"}]}`,
+输出 {"answers":[{"index":0,"answer":"B"},{"index":2,"answer":"……","points":["要点1","要点2"]}]}`,
     temperature: 0,
   })
 
   const list = Array.isArray(data?.answers) ? data.answers : []
   for (const item of list) {
     const index = Number(item?.index)
-    if (!Number.isInteger(index)) continue
-    if (!targets.some((entry) => entry.index === index)) continue
-    map.set(index, String(item?.answer || '').trim())
+    if (!Number.isInteger(index) || index < 0 || index >= questions.length) continue
+    const answer = String(item?.answer || '').trim()
+    if (answer) answers.set(index, answer)
+    if (Array.isArray(item?.points)) {
+      const parsed = item.points.map((point: any) => String(point || '').trim()).filter(Boolean)
+      if (parsed.length) points.set(index, parsed)
+    }
   }
-  return map
+  return { answers, points }
+}
+
+interface ShortPair {
+  index: number
+  labeled: string[]
+  blind: string[]
+}
+
+/**
+ * 简答题没有唯一答案，无法逐字比对。
+ * 这里比较「两组独立产出的要点」，比较者不参与任何一方的生成，相关性已被切断。
+ */
+async function compareShortAnswers(pairs: ShortPair[]): Promise<Set<number>> {
+  const equivalent = new Set<number>()
+  if (!pairs.length) return equivalent
+
+  const payload = pairs.map((pair) => ({
+    index: pair.index,
+    A: pair.labeled.slice(0, 6),
+    B: pair.blind.slice(0, 6),
+  }))
+
+  const data = await chatJSON({
+    system: '你是答案核对员。只输出 JSON，不做解释。',
+    user: `下面是几组简答题要点。每组 A 和 B 是对同一道题的两次独立作答，先后顺序不代表对错。
+
+请判断每组 A 和 B 表达的意思是否实质相同：
+- 措辞不同、顺序不同，但说的是同一件事 → 相同
+- 遗漏关键要点，或结论相互矛盾 → 不同
+
+${JSON.stringify(payload, null, 2)}
+
+输出 {"results":[{"index":0,"equivalent":true}]}，必须覆盖每一组。`,
+    temperature: 0,
+  })
+
+  const list = Array.isArray(data?.results) ? data.results : []
+  for (const item of list) {
+    const index = Number(item?.index)
+    if (Number.isInteger(index) && item?.equivalent === true) equivalent.add(index)
+  }
+  return equivalent
 }
 
 export interface GenerationStats {
@@ -836,15 +891,40 @@ export async function generateQuestionsForKP(
 
   // 2. 双盲复核（独立采样，与标注答案比对）
   const blind = await blindAnswers(kp, supported)
-  const consistent = supported.filter((question, index) => {
-    if (question.type === 'short') return true
-    const answered = blind.get(index)
-    if (!answered) return false
-    if (question.type === 'choice') {
-      return normalizeChoiceAnswer(answered) === normalizeChoiceAnswer(question.answer)
+  const passed: { index: number; question: RawQuestion }[] = []
+  const shortPairs: ShortPair[] = []
+
+  supported.forEach((question, index) => {
+    if (question.type === 'short') {
+      const blindPoints = blind.points.get(index) || []
+      const labeled = question.keyPoints || []
+      if (blindPoints.length && labeled.length) {
+        shortPairs.push({ index, labeled, blind: blindPoints })
+        passed.push({ index, question })
+      }
+      return
     }
-    return normalizeJudgeText(answered) === normalizeJudgeText(question.answer)
+
+    const answered = blind.answers.get(index) || ''
+    const same =
+      question.type === 'choice'
+        ? normalizeChoiceAnswer(answered) === normalizeChoiceAnswer(question.answer)
+        : normalizeJudgeText(answered) === normalizeJudgeText(question.answer)
+    if (same) passed.push({ index, question })
   })
+
+  if (shortPairs.length) {
+    const equivalent = await compareShortAnswers(shortPairs)
+    for (let i = passed.length - 1; i >= 0; i -= 1) {
+      const entry = passed[i]
+      if (entry.question.type !== 'short') continue
+      if (!equivalent.has(entry.index)) passed.splice(i, 1)
+    }
+  }
+
+  const consistent = passed
+    .sort((a, b) => a.index - b.index)
+    .map((entry) => entry.question)
   const conflicts = supported.length - consistent.length
 
   // 3. 文本自检（同一模型，补双盲覆盖不到的问题；失败不阻塞）
