@@ -10,6 +10,9 @@ import { loadAISettings, type AISettings } from './settings'
 const CHUNK_SIZE = 5200
 const MAX_CHUNKS = 12
 
+/** 调参开关：把命题自检的明细打到控制台。调完改成 false 即可静默。 */
+const DEBUG_REVIEW = true
+
 let cachedModelId: string | null = null
 
 async function resolveModel(): Promise<string> {
@@ -715,6 +718,9 @@ ${JSON.stringify(payload, null, 2)}
   })
 
   const list = Array.isArray(data?.bad) ? data.bad : []
+  if (!Array.isArray(data?.bad) && DEBUG_REVIEW) {
+    console.warn('[命题自检] 审核返回结构异常，本次按「全部通过」处理：', data)
+  }
   return list
     .map((item: any) => ({
       index: Number(item?.index),
@@ -745,12 +751,31 @@ export async function generateQuestionsForKP(
   let issues: ReviewIssue[] = []
   try {
     issues = await reviewQuestions(kp, first)
-  } catch {
+  } catch (error) {
+    if (DEBUG_REVIEW) console.warn('[命题自检] 审核调用失败，已跳过审核：', error)
     issues = []
   }
 
   const badIndex = new Set(issues.map((issue) => issue.index))
   const good = first.filter((_, index) => !badIndex.has(index))
+
+  if (DEBUG_REVIEW) {
+    if (issues.length) {
+      console.groupCollapsed(
+        `[命题自检] ${kp.title}：${first.length} 题中 ${issues.length} 道不合格`,
+      )
+      for (const issue of issues) {
+        const stem = first[issue.index]?.stem || '（未知题目）'
+        const answer = first[issue.index]?.answer || ''
+        console.log(
+          `#${issue.index + 1} ${issue.reason || '未说明原因'}\n  题干：${stem}\n  标注答案：${answer}`,
+        )
+      }
+      console.groupEnd()
+    } else {
+      console.log(`[命题自检] ${kp.title}：${first.length} 题全部通过`)
+    }
+  }
 
   let repaired: RawQuestion[] = []
   if (issues.length) {
@@ -777,6 +802,12 @@ export async function generateQuestionsForKP(
     }
     seen.add(normalizeStem(question.stem))
     questions.push(question)
+  }
+
+  if (DEBUG_REVIEW) {
+    console.log(
+      `[命题自检] ${kp.title}：出 ${first.length} → 拦下 ${issues.length} → 重出 ${repaired.length} → 保留 ${questions.length}（重复 ${skipped}）`,
+    )
   }
 
   return { questions, skipped, rejected: issues.length }
