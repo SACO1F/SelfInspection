@@ -49,20 +49,26 @@ async function proxyChat(req, res) {
 
   try {
     const payload = JSON.parse(await readBody(req))
+    const system = [config.systemPrefix, payload.system].filter(Boolean).join('\n\n')
+
+    const body = {
+      model: config.model,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: String(payload.user || '') },
+      ],
+      temperature: typeof payload.temperature === 'number' ? payload.temperature : 0.4,
+    }
+    // GLM-4.5 系列支持关闭思考，能显著降低延迟与 token
+    if (config.disableThinking) body.thinking = { type: 'disabled' }
+
     const upstream = await fetch(`${String(config.upstream).replace(/\/+$/, '')}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${config.apiKey}`,
       },
-      body: JSON.stringify({
-        model: config.model,
-        messages: [
-          { role: 'system', content: String(payload.system || '') },
-          { role: 'user', content: String(payload.user || '') },
-        ],
-        temperature: typeof payload.temperature === 'number' ? payload.temperature : 0.4,
-      }),
+      body: JSON.stringify(body),
     })
 
     const data = await upstream.json().catch(() => null)
