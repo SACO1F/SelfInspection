@@ -5,7 +5,12 @@ import type { Repo, NewQuestion, QuestionPatch } from '../lib/repo'
 import { loadQueue, saveQueue, type QueueItem } from '../lib/queue'
 import { LIMITS, consumeImport, consumePoints, remainingImports, remainingPoints } from '../lib/quota'
 import type { TaskItem } from './TaskProgress'
-import { extractKnowledgePoints, generateQuestionsForKP, describeError } from '../lib/llm'
+import {
+  extractKnowledgePoints,
+  generateQuestionsForKP,
+  describeError,
+  routeDocument,
+} from '../lib/llm'
 import {
   buildSections,
   toMarkdown,
@@ -427,10 +432,15 @@ export default function Workspace({
     setBusy(true)
     const taskId = onTaskStart(`拆解「${doc.title}」的知识点`)
     try {
-      const result = await extractKnowledgePoints(doc.content, (done, total) =>
+      const routed = await routeDocument(doc.content)
+      const knowledgeChunks = routed.chunks.filter(
+        (_, index) => routed.kinds[index] !== 'questions',
+      )
+      const chunks = knowledgeChunks.length ? knowledgeChunks : routed.chunks
+      const extracted = await extractKnowledgePoints(chunks, (done, total) =>
         onTaskUpdate(taskId, { label: '正在拆解知识点', done, total }),
       )
-      const created = await repo.replacePoints(doc.id, result.points)
+      const created = await repo.replacePoints(doc.id, extracted)
       setPoints(created)
       setQuestions([])
       setDrafts([])
@@ -440,10 +450,8 @@ export default function Workspace({
       consumeImport()
       onTaskFinish(taskId, 'done')
       notify(
-        result.truncated
-          ? `已生成 ${created.length} 个知识点。资料较长，本次只分析了前 ${Math.round(
-              result.analyzedChars / 1000,
-            )} 千字。`
+        routed.truncated
+          ? `已生成 ${created.length} 个知识点。资料较长，本次只分析了前面部分。`
           : `已生成 ${created.length} 个知识点。`,
       )
     } catch (err) {
