@@ -12,3 +12,6 @@ Thumbs.db
 .git-legacy-*/
 .workbuddy/
 .wbapp_*.genie
+
+# 站点模型凭据：只在部署时随目录上传，绝不进仓库
+server.config.json
