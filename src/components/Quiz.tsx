@@ -1,12 +1,14 @@
 import { useMemo, useRef, useState } from 'react'
 import type { KnowledgePoint, Question } from '../lib/types'
 import { TYPE_LABEL, LETTERS } from '../lib/types'
+import type { Repo } from '../lib/repo'
 import { gradeShortAnswers, describeError } from '../lib/llm'
 
 interface Props {
   docTitle: string
   questions: Question[]
   points: KnowledgePoint[]
+  repo: Repo
   onExit: () => void
   notify: (message: string) => void
 }
@@ -23,7 +25,7 @@ function verdict(score: number): { label: string; tone: string } {
   return { label: '需要回头再看', tone: 'bad' }
 }
 
-export default function Quiz({ docTitle, questions, points, onExit, notify }: Props) {
+export default function Quiz({ docTitle, questions, points, repo, onExit, notify }: Props) {
   const [answers, setAnswers] = useState<Record<number, string>>({})
   const [results, setResults] = useState<Record<number, ResultRow> | null>(null)
   const [grading, setGrading] = useState(false)
@@ -101,6 +103,26 @@ export default function Quiz({ docTitle, questions, points, onExit, notify }: Pr
     setElapsed(Math.round((Date.now() - startedAt) / 1000))
     setGrading(false)
     scrollTop()
+
+    // 落库用于掌握度统计；失败不影响本次成绩展示
+    try {
+      await repo.addAttempts(
+        questions.map((question) => {
+          const score = next[question.id]?.score || 0
+          return {
+            document_id: question.document_id,
+            question_id: question.id,
+            knowledge_point_id: question.knowledge_point_id,
+            type: question.type,
+            is_correct: score >= 0.999,
+            score: Math.round(score * 100),
+            chosen: answers[question.id] || '',
+          }
+        }),
+      )
+    } catch (error) {
+      notify((error as Error).message)
+    }
   }
 
   function retry() {

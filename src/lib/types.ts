@@ -23,8 +23,7 @@ export interface KnowledgePoint {
   order_index: number
 }
 
-export interface Question {
-  id: number
+export interface Question {  id: number
   document_id: number
   knowledge_point_id: number | null
   type: QuestionType
@@ -42,6 +41,21 @@ export interface QuestionCounts {
   judge: number
   short: number
 }
+
+/** 一次作答记录，用于统计掌握度 */
+export interface Attempt {
+  id: number
+  document_id: number
+  question_id: number
+  knowledge_point_id: number | null
+  type: QuestionType
+  is_correct: boolean
+  score: number
+  chosen: string
+  created_at: string
+}
+
+export type NewAttempt = Omit<Attempt, 'id' | 'created_at'>
 
 export const TYPE_LABEL: Record<QuestionType, string> = {
   choice: '选择题',

@@ -9,7 +9,7 @@ interface Props {
   userLabel: string
   customAI: boolean
   tasks: TaskItem[]
-  quota: { imports: number; points: number }
+  quota: { imports: number }
   onOpen: (id: number) => void
   onUpload: (files: File[]) => void
   onDelete: (doc: Doc) => void
@@ -124,7 +124,9 @@ export default function Library({
               支持 PDF、Word(.docx)、Markdown、TXT，单份不超过 20MB，可一次选多份
             </p>
             <p className="dropzone-quota">
-              今日剩余：可处理 {quota.imports} 份资料 · 可出题 {quota.points} 个知识点
+              {Number.isFinite(quota.imports)
+                ? `今日还可处理 ${quota.imports} 份资料`
+                : '已接入自己的模型 · 不限次数'}
             </p>
           </div>
         </div>

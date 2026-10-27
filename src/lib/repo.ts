@@ -1,5 +1,13 @@
 import { cloud } from '../cloud'
-import type { Doc, DocKind, KnowledgePoint, Question, QuestionStatus } from './types'
+import type {
+  Attempt,
+  Doc,
+  DocKind,
+  KnowledgePoint,
+  NewAttempt,
+  Question,
+  QuestionStatus,
+} from './types'
 
 export type DocWithContent = Doc & { content: string }
 
@@ -33,6 +41,8 @@ export interface Repo {
   updateQuestion(id: number, patch: QuestionPatch): Promise<Question | null>
   confirmQuestions(ids: number[]): Promise<Question[]>
   deleteQuestion(id: number): Promise<boolean>
+  addAttempts(rows: NewAttempt[]): Promise<void>
+  listAttempts(documentId: number): Promise<Attempt[]>
 }
 
 export function normalizePoint(row: any): KnowledgePoint {
@@ -61,8 +71,21 @@ export function normalizeQuestion(row: any): Question {
   }
 }
 
-function toPayload(row: NewQuestion) {
+export function normalizeAttempt(row: any): Attempt {
   return {
+    id: row.id,
+    document_id: row.document_id,
+    question_id: row.question_id,
+    knowledge_point_id: row.knowledge_point_id ?? null,
+    type: row.type,
+    is_correct: row.is_correct === true,
+    score: Number(row.score) || 0,
+    chosen: row.chosen || '',
+    created_at: row.created_at || '',
+  }
+}
+
+function toPayload(row: NewQuestion) {  return {
     document_id: row.document_id,
     knowledge_point_id: row.knowledge_point_id,
     type: row.type,
@@ -197,6 +220,22 @@ export const cloudRepo: Repo = {
     const { data, error } = await cloud.database.from('questions').delete().eq('id', id).select()
     return !error && !!(data || []).length
   },
+
+  async addAttempts(rows) {
+    if (!rows.length) return
+    const { error } = await cloud.database.from('attempts').insert(rows)
+    if (error) throw new Error('答题记录没有保存成功，成绩仅本次有效。')
+  },
+
+  async listAttempts(documentId) {
+    const { data, error } = await cloud.database
+      .from('attempts')
+      .select('*')
+      .eq('document_id', documentId)
+      .order('created_at', { ascending: true })
+    if (error) return []
+    return (data || []).map(normalizeAttempt)
+  },
 }
 
 /* ---------------------------- 游客实现 ---------------------------- */
@@ -211,11 +250,18 @@ interface GuestSnapshot {
   documents: DocWithContent[]
   points: KnowledgePoint[]
   questions: Question[]
-  seq: { doc: number; point: number; question: number }
+  attempts: Attempt[]
+  seq: { doc: number; point: number; question: number; attempt: number }
 }
 
 function emptySnapshot(): GuestSnapshot {
-  return { documents: [], points: [], questions: [], seq: { doc: 0, point: 0, question: 0 } }
+  return {
+    documents: [],
+    points: [],
+    questions: [],
+    attempts: [],
+    seq: { doc: 0, point: 0, question: 0, attempt: 0 },
+  }
 }
 
 function loadSnapshot(): GuestSnapshot {
@@ -228,10 +274,12 @@ function loadSnapshot(): GuestSnapshot {
       documents: parsed.documents,
       points: Array.isArray(parsed.points) ? parsed.points : [],
       questions: Array.isArray(parsed.questions) ? parsed.questions : [],
+      attempts: Array.isArray(parsed.attempts) ? parsed.attempts : [],
       seq: {
         doc: Number(parsed?.seq?.doc) || 0,
         point: Number(parsed?.seq?.point) || 0,
         question: Number(parsed?.seq?.question) || 0,
+        attempt: Number(parsed?.seq?.attempt) || 0,
       },
     }
   } catch {
@@ -351,5 +399,21 @@ export const guestRepo: Repo = {
     memory.questions = memory.questions.filter((question) => question.id !== id)
     flush()
     return existed
+  },
+
+  async addAttempts(rows) {
+    if (!rows.length) return
+    for (const row of rows) {
+      memory.attempts.push({
+        ...row,
+        id: ++memory.seq.attempt,
+        created_at: new Date().toISOString(),
+      })
+    }
+    flush()
+  },
+
+  async listAttempts(documentId) {
+    return memory.attempts.filter((attempt) => attempt.document_id === documentId)
   },
 }

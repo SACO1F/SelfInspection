@@ -9,7 +9,7 @@ import {
   extractKnowledgePoints,
 } from './lib/llm'
 import { hasCustomAI } from './lib/settings'
-import { LIMITS, consumeImport, remainingImports, remainingPoints } from './lib/quota'
+import { LIMITS, consumeImport, remainingImports } from './lib/quota'
 import { parseFile } from './lib/parseFile'
 import Login from './components/Login'
 import Library from './components/Library'
@@ -387,7 +387,7 @@ export default function App() {
           userLabel={guest ? '游客' : maskUser(session)}
           customAI={customAI}
           tasks={tasks}
-          quota={{ imports: remainingImports(), points: remainingPoints() }}
+          quota={{ imports: remainingImports() }}
           onOpen={openDoc}
           onUpload={handleUpload}
           onDelete={deleteDoc}

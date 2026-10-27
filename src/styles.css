@@ -798,6 +798,32 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
+.mastery-badge {
+  font-size: 10.5px;
+  border-radius: 100px;
+  padding: 1px 6px;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid transparent;
+}
+
+.mastery-badge.good {
+  color: var(--good);
+  background: var(--good-tint);
+  border-color: #d5e5d9;
+}
+
+.mastery-badge.ok {
+  color: #8a6a2f;
+  background: #f7efdd;
+  border-color: #ecdfc2;
+}
+
+.mastery-badge.bad {
+  color: var(--bad);
+  background: #f7e6e2;
+  border-color: #eed6d0;
+}
+
 .side-empty {
   padding: 14px 10px;
   font-size: 13px;

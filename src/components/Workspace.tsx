@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { Doc, DocKind, KnowledgePoint, Question, QuestionCounts } from '../lib/types'
+import type { Attempt, Doc, DocKind, KnowledgePoint, Question, QuestionCounts } from '../lib/types'
 import { TYPE_LABEL, LETTERS } from '../lib/types'
 import type { Repo, NewQuestion, QuestionPatch } from '../lib/repo'
 import { loadQueue, saveQueue, type QueueItem } from '../lib/queue'
-import { LIMITS, consumeImport, consumePoints, remainingImports, remainingPoints } from '../lib/quota'
+import { LIMITS, consumeImport, remainingImports } from '../lib/quota'
 import type { TaskItem } from './TaskProgress'
 import {
   extractKnowledgePoints,
@@ -37,6 +37,21 @@ interface Props {
 type Tab = 'points' | 'drafts' | 'questions'
 
 const DEFAULT_COUNTS: QuestionCounts = { choice: 3, judge: 2, short: 1 }
+
+/** 把请求的题量压到剩余额度内，优先压缩数量最多的题型 */
+function clampCounts(counts: QuestionCounts, room: number): QuestionCounts {
+  const next: QuestionCounts = { ...counts }
+  let total = next.choice + next.judge + next.short
+  while (total > room) {
+    if (next.short > 0 && next.short >= next.choice && next.short >= next.judge) next.short -= 1
+    else if (next.choice > 0 && next.choice >= next.judge) next.choice -= 1
+    else if (next.judge > 0) next.judge -= 1
+    else break
+    total -= 1
+  }
+  if (total < 0) return { choice: 0, judge: 0, short: 0 }
+  return next
+}
 const COUNT_KEYS: (keyof QuestionCounts)[] = ['choice', 'judge', 'short']
 const COUNT_LABEL: Record<keyof QuestionCounts, string> = {
   choice: '选择',
@@ -362,21 +377,37 @@ export default function Workspace({
   const [counts, setCounts] = useState<QuestionCounts>(DEFAULT_COUNTS)
   const [submitting, setSubmitting] = useState(false)
   const [quizOpen, setQuizOpen] = useState(false)
+  const [attempts, setAttempts] = useState<Attempt[]>([])
+
+  const mastery = useMemo(() => {
+    const map = new Map<number, { total: number; correct: number }>()
+    for (const attempt of attempts) {
+      const key = attempt.knowledge_point_id
+      if (key == null) continue
+      const row = map.get(key) || { total: 0, correct: 0 }
+      row.total += 1
+      if (attempt.is_correct) row.correct += 1
+      map.set(key, row)
+    }
+    return map
+  }, [attempts])
 
   useEffect(() => {
     let cancelled = false
     ;(async () => {
       setLoading(true)
       try {
-        const [loadedPoints, loadedConfirmed, loadedDrafts] = await Promise.all([
+        const [loadedPoints, loadedConfirmed, loadedDrafts, loadedAttempts] = await Promise.all([
           repo.listPoints(doc.id),
           repo.listQuestions(doc.id, 'confirmed'),
           repo.listQuestions(doc.id, 'draft'),
+          repo.listAttempts(doc.id),
         ])
         if (cancelled) return
         setPoints(loadedPoints)
         setQuestions(loadedConfirmed)
         setDrafts(loadedDrafts)
+        setAttempts(loadedAttempts)
         setActiveId(loadedPoints[0]?.id ?? null)
 
         // 知识点被删掉后，本地残留的队列项要一并清理
@@ -517,16 +548,7 @@ export default function Workspace({
   async function runGeneration(queued: QueueItem[]) {
     if (!queued.length || submitting) return
 
-    const affordable = Math.min(queued.length, remainingPoints())
-    if (affordable <= 0) {
-      notify(`今天的出题额度用完了（每日 ${LIMITS.dailyKnowledgePoints} 个知识点），明天再来。`)
-      return
-    }
-    if (affordable < queued.length) {
-      notify(`今天还能出 ${affordable} 个知识点，其余的先留在队列里。`)
-    }
-    const items = queued.slice(0, affordable)
-
+    const items = queued
     setSubmitting(true)
     const failedIds: number[] = []
     let added = 0
@@ -534,7 +556,7 @@ export default function Workspace({
     let rejected = 0
     let conflicts = 0
     let unsupported = 0
-    let okCount = 0
+    let capped = 0
     const single = items.length === 1 ? points.find((entry) => entry.id === items[0].pointId) : null
     const taskId = onTaskStart(
       single ? `为「${single.title}」出题` : `批量出题（${items.length} 个知识点）`,
@@ -548,16 +570,25 @@ export default function Workspace({
           continue
         }
 
+        // 单个知识点题量上限：知识点就那么点内容，出太多必然是凑数
+        const existingForPoint = [...questions, ...drafts].filter(
+          (entry) => entry.knowledge_point_id === point.id,
+        )
+        const room = LIMITS.maxQuestionsPerPoint - existingForPoint.length
+        const requestCounts = clampCounts(item.counts, room)
+        if (room <= 0 || requestCounts.choice + requestCounts.judge + requestCounts.short <= 0) {
+          capped += 1
+          continue
+        }
+
         onTaskUpdate(taskId, {
           label: '正在出题',
           done: index,
           total: items.length > 1 ? items.length : 0,
         })
         try {
-          const existing = [...questions, ...drafts]
-            .filter((entry) => entry.knowledge_point_id === point.id)
-            .map((entry) => entry.stem)
-          const result = await generateQuestionsForKP(point, item.counts, existing)
+          const existing = existingForPoint.map((entry) => entry.stem)
+          const result = await generateQuestionsForKP(point, requestCounts, existing)
           skipped += result.skipped
           rejected += result.rejected
           conflicts += result.conflicts
@@ -579,7 +610,6 @@ export default function Workspace({
           }))
           const created = await repo.addQuestions(rows)
           added += created.length
-          okCount += 1
           setDrafts((prev) => [...prev, ...created])
         } catch {
           failedIds.push(item.pointId)
@@ -587,10 +617,10 @@ export default function Workspace({
       }
 
       setQueue((prev) => prev.filter((item) => failedIds.includes(item.pointId)))
-      consumePoints(okCount)
       onTaskFinish(taskId, added ? 'done' : 'error', added ? undefined : '没有生成出新题目')
 
       const notes: string[] = []
+      if (capped) notes.push(`${capped} 个知识点已达 ${LIMITS.maxQuestionsPerPoint} 道题上限`)
       if (unsupported) notes.push(`${unsupported} 道找不到原文依据`)
       if (conflicts) notes.push(`${conflicts} 道复核答案与标注不符`)
       if (rejected) notes.push(`${rejected} 道自检不合格`)
@@ -813,6 +843,23 @@ export default function Workspace({
                   <span className="point-index">{String(index + 1).padStart(2, '0')}</span>
                   <span className="point-title">{point.title}</span>
                   <span className="point-flags">
+                    {mastery.get(point.id) && (
+                      <span
+                        className={`mastery-badge ${
+                          (mastery.get(point.id)!.correct / mastery.get(point.id)!.total) >= 0.8
+                            ? 'good'
+                            : (mastery.get(point.id)!.correct / mastery.get(point.id)!.total) >= 0.5
+                              ? 'ok'
+                              : 'bad'
+                        }`}
+                        title={`已做 ${mastery.get(point.id)!.total} 题，对 ${mastery.get(point.id)!.correct} 题`}
+                      >
+                        {Math.round(
+                          (mastery.get(point.id)!.correct / mastery.get(point.id)!.total) * 100,
+                        )}
+                        %
+                      </span>
+                    )}
                     {queuedIds.has(point.id) && (
                       <span className="queue-dot" title="已在出题文档中" />
                     )}
@@ -1142,7 +1189,14 @@ export default function Workspace({
           docTitle={doc.title}
           questions={questions}
           points={points}
-          onExit={() => setQuizOpen(false)}
+          repo={repo}
+          onExit={() => {
+            setQuizOpen(false)
+            repo
+              .listAttempts(doc.id)
+              .then(setAttempts)
+              .catch(() => undefined)
+          }}
           notify={notify}
         />
       )}
