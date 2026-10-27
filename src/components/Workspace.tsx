@@ -3,6 +3,7 @@ import type { Doc, DocKind, KnowledgePoint, Question, QuestionCounts } from '../
 import { TYPE_LABEL, LETTERS } from '../lib/types'
 import type { Repo, NewQuestion, QuestionPatch } from '../lib/repo'
 import { loadQueue, saveQueue, type QueueItem } from '../lib/queue'
+import { LIMITS, consumeImport, consumePoints, remainingImports, remainingPoints } from '../lib/quota'
 import type { TaskItem } from './TaskProgress'
 import { extractKnowledgePoints, generateQuestionsForKP, describeError } from '../lib/llm'
 import {
@@ -418,6 +419,11 @@ export default function Workspace({
       const confirmed = window.confirm('重新生成会删除现有知识点和与之关联的题目，确定继续吗？')
       if (!confirmed) return
     }
+    if (remainingImports() <= 0) {
+      notify(`今天的资料处理额度用完了（每日 ${LIMITS.dailyImports} 份），明天再来。`)
+      return
+    }
+
     setBusy(true)
     const taskId = onTaskStart(`拆解「${doc.title}」的知识点`)
     try {
@@ -431,6 +437,7 @@ export default function Workspace({
       setQueue([])
       setActiveId(created[0]?.id ?? null)
       setTab('points')
+      consumeImport()
       onTaskFinish(taskId, 'done')
       notify(
         result.truncated
@@ -499,8 +506,19 @@ export default function Workspace({
   }
 
   /** 批量或单点出题共用一套逻辑；成功的从队列移除，失败的留在队列里 */
-  async function runGeneration(items: QueueItem[]) {
-    if (!items.length || submitting) return
+  async function runGeneration(queued: QueueItem[]) {
+    if (!queued.length || submitting) return
+
+    const affordable = Math.min(queued.length, remainingPoints())
+    if (affordable <= 0) {
+      notify(`今天的出题额度用完了（每日 ${LIMITS.dailyKnowledgePoints} 个知识点），明天再来。`)
+      return
+    }
+    if (affordable < queued.length) {
+      notify(`今天还能出 ${affordable} 个知识点，其余的先留在队列里。`)
+    }
+    const items = queued.slice(0, affordable)
+
     setSubmitting(true)
     const failedIds: number[] = []
     let added = 0
@@ -508,6 +526,7 @@ export default function Workspace({
     let rejected = 0
     let conflicts = 0
     let unsupported = 0
+    let okCount = 0
     const single = items.length === 1 ? points.find((entry) => entry.id === items[0].pointId) : null
     const taskId = onTaskStart(
       single ? `为「${single.title}」出题` : `批量出题（${items.length} 个知识点）`,
@@ -552,6 +571,7 @@ export default function Workspace({
           }))
           const created = await repo.addQuestions(rows)
           added += created.length
+          okCount += 1
           setDrafts((prev) => [...prev, ...created])
         } catch {
           failedIds.push(item.pointId)
@@ -559,6 +579,7 @@ export default function Workspace({
       }
 
       setQueue((prev) => prev.filter((item) => failedIds.includes(item.pointId)))
+      consumePoints(okCount)
       onTaskFinish(taskId, added ? 'done' : 'error', added ? undefined : '没有生成出新题目')
 
       const notes: string[] = []

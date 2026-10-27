@@ -9,6 +9,7 @@ interface Props {
   userLabel: string
   customAI: boolean
   tasks: TaskItem[]
+  quota: { imports: number; points: number }
   onOpen: (id: number) => void
   onUpload: (files: File[]) => void
   onDelete: (doc: Doc) => void
@@ -37,6 +38,7 @@ export default function Library({
   userLabel,
   customAI,
   tasks,
+  quota,
   onOpen,
   onUpload,
   onDelete,
@@ -120,6 +122,9 @@ export default function Library({
             <p className="dropzone-title">拖入文件，或点击选择</p>
             <p className="dropzone-hint">
               支持 PDF、Word(.docx)、Markdown、TXT，单份不超过 20MB，可一次选多份
+            </p>
+            <p className="dropzone-quota">
+              今日剩余：可处理 {quota.imports} 份资料 · 可出题 {quota.points} 个知识点
             </p>
           </div>
         </div>

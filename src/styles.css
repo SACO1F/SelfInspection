@@ -494,6 +494,13 @@ textarea {
   color: var(--ink-3);
 }
 
+.dropzone-quota {
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  opacity: 0.85;
+}
+
 .doc-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(272px, 1fr));

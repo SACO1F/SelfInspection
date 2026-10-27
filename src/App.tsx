@@ -9,6 +9,7 @@ import {
   extractKnowledgePoints,
 } from './lib/llm'
 import { hasCustomAI } from './lib/settings'
+import { LIMITS, consumeImport, remainingImports, remainingPoints } from './lib/quota'
 import { parseFile } from './lib/parseFile'
 import Login from './components/Login'
 import Library from './components/Library'
@@ -192,6 +193,13 @@ export default function App() {
     try {
       updateTask(taskId, { label: '正在解析文件', done: 0, total: 0 })
       const parsed = await parseFile(file)
+      if (parsed.text.length > LIMITS.maxChars) {
+        throw new Error(
+          `资料约 ${Math.round(parsed.text.length / 10000)} 万字，超过单份 ${
+            LIMITS.maxChars / 10000
+          } 万字上限，请拆分后再导入。`,
+        )
+      }
 
       updateTask(taskId, { label: '正在识别资料结构', done: 0, total: 0 })
       const routed = await routeDocument(parsed.text)
@@ -207,6 +215,7 @@ export default function App() {
         kind,
       })
       updateTask(taskId, { docId: created.id })
+      consumeImport()
       await loadDocs(true)
 
       const notes: string[] = []
@@ -271,8 +280,19 @@ export default function App() {
     }
   }
 
-  async function handleUpload(files: File[]) {
-    if (!files.length) return
+  async function handleUpload(picked: File[]) {
+    if (!picked.length) return
+
+    const allowed = remainingImports()
+    if (allowed <= 0) {
+      notify(`今天的资料处理额度用完了（每日 ${LIMITS.dailyImports} 份），明天再来。`)
+      return
+    }
+    const files = picked.slice(0, allowed)
+    if (files.length < picked.length) {
+      notify(`今天还能处理 ${files.length} 份资料，其余的先留着吧。`)
+    }
+
     const stamp = Date.now()
     const items: TaskItem[] = files.map((file, index) => ({
       id: `${stamp}-${index}`,
@@ -367,6 +387,7 @@ export default function App() {
           userLabel={guest ? '游客' : maskUser(session)}
           customAI={customAI}
           tasks={tasks}
+          quota={{ imports: remainingImports(), points: remainingPoints() }}
           onOpen={openDoc}
           onUpload={handleUpload}
           onDelete={deleteDoc}
