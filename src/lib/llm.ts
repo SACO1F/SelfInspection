@@ -2,6 +2,7 @@ import { cloud } from '../cloud'
 import type { QuestionType, QuestionCounts, DocKind } from './types'
 import { LETTERS } from './types'
 import { loadAISettings, type AISettings } from './settings'
+import { loadSiteModel } from './siteModel'
 
 /* ------------------------------------------------------------------ */
 /* 基础调用层                                                          */
@@ -105,6 +106,15 @@ async function chatText(opts: {
 }): Promise<string> {
   const custom = loadAISettings()
   if (custom) return chatViaCustom(custom, opts)
+
+  // 站点默认模型：站主提供，不需要访客配置
+  const site = await loadSiteModel()
+  if (site) {
+    return chatViaCustom(
+      { baseUrl: site.endpoint, apiKey: site.apiKey, model: site.model },
+      opts,
+    )
+  }
 
   const model = await resolveModel()
 
