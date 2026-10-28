@@ -365,7 +365,7 @@ export default function Quiz({ docTitle, questions, points, repo, onExit, notify
                 {results && question.evidence && (
                   <div className="quiz-explain">
                     <span className="explain-label">原文出处</span>
-                    <p>{question.evidence}</p>
+                    <p>“{question.evidence}”</p>
                   </div>
                 )}
 

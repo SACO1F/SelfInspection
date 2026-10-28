@@ -159,7 +159,7 @@ function QuestionPreview({
       </div>
 
       {showEvidence && question.evidence ? (
-        <blockquote className="evidence-block">{question.evidence}</blockquote>
+        <blockquote className="evidence-block">“{question.evidence}”</blockquote>
       ) : null}
 
       {showAnswer && (
@@ -405,7 +405,7 @@ function HistoryRecord({
           {question.evidence && (
             <div className="quiz-explain">
               <span className="explain-label">原文出处</span>
-              <p>{question.evidence}</p>
+              <p>“{question.evidence}”</p>
             </div>
           )}
         </>
@@ -874,7 +874,7 @@ export default function Workspace({
       lines.push(`- 正确答案：${question?.answer || '—'}`)
       lines.push(`- 判定：${attempt.is_correct ? '正确' : '错误'}`)
       if (question?.explanation) lines.push(`- 解析：${question.explanation}`)
-      if (question?.evidence) lines.push(`- 原文出处：${question.evidence}`)
+      if (question?.evidence) lines.push(`- 原文出处：“${question.evidence}”`)
       lines.push('')
     })
 
