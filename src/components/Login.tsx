@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { cloud } from '../cloud'
-import { Logo } from './Logo'
 
 interface Props {
   onSignedIn: () => void
@@ -116,7 +115,6 @@ export default function Login({ onSignedIn, onGuest, initialError }: Props) {
       <div className="auth-ornament" aria-hidden="true" />
       <div className="auth-card">
         <div className="brand">
-          <Logo size={30} />
           <span className="brand-name">知微</span>
         </div>
         <h1 className="auth-title">把一份资料，变成一场自检</h1>

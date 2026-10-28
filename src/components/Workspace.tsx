@@ -28,7 +28,6 @@ import {
   downloadText,
   safeFileName,
 } from '../lib/export'
-import { Logo } from './Logo'
 import Quiz from './Quiz'
 
 interface Props {
@@ -938,7 +937,6 @@ export default function Workspace({
               <path d="M14 6l-6 6 6 6" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </button>
-          <Logo size={20} />
           <span className="doc-head-title">{doc.title}</span>
           {kind !== 'knowledge' && (
             <span className="kind-chip">{kind === 'mixed' ? '讲义+题库' : '题库'}</span>

@@ -16,7 +16,6 @@ import Library from './components/Library'
 import Workspace from './components/Workspace'
 import AISettings from './components/AISettings'
 import TaskStack, { type TaskItem } from './components/TaskProgress'
-import { Logo } from './components/Logo'
 
 type ActiveDoc = Doc & { content: string }
 
@@ -355,7 +354,6 @@ export default function App() {
   if (booting) {
     return (
       <div className="splash">
-        <Logo size={34} />
         <span className="splash-text">正在准备…</span>
       </div>
     )

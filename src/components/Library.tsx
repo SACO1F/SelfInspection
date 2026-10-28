@@ -1,7 +1,6 @@
 import { useRef, useState } from 'react'
 import type { Doc } from '../lib/types'
 import type { TaskItem } from './TaskProgress'
-import { Logo } from './Logo'
 
 interface Props {
   docs: Doc[]
@@ -57,7 +56,6 @@ export default function Library({
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <Logo size={22} />
           <span className="brand-name">知微</span>
           <span className="brand-divider" />
           <span className="brand-section">资料库</span>
