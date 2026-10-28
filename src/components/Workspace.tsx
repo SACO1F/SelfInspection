@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { Attempt, Doc, DocKind, KnowledgePoint, Question, QuestionCounts } from '../lib/types'
+import type {
+  Attempt,
+  Doc,
+  DocKind,
+  KnowledgePoint,
+  Question,
+  QuestionCounts,
+  QuizSession,
+} from '../lib/types'
 import { TYPE_LABEL, LETTERS } from '../lib/types'
 import type { Repo, NewQuestion, QuestionPatch } from '../lib/repo'
 import { loadQueue, saveQueue, type QueueItem } from '../lib/queue'
@@ -378,6 +386,7 @@ export default function Workspace({
   const [submitting, setSubmitting] = useState(false)
   const [quizOpen, setQuizOpen] = useState(false)
   const [attempts, setAttempts] = useState<Attempt[]>([])
+  const [sessions, setSessions] = useState<QuizSession[]>([])
 
   const mastery = useMemo(() => {
     const map = new Map<number, { total: number; correct: number }>()
@@ -397,17 +406,20 @@ export default function Workspace({
     ;(async () => {
       setLoading(true)
       try {
-        const [loadedPoints, loadedConfirmed, loadedDrafts, loadedAttempts] = await Promise.all([
-          repo.listPoints(doc.id),
-          repo.listQuestions(doc.id, 'confirmed'),
-          repo.listQuestions(doc.id, 'draft'),
-          repo.listAttempts(doc.id),
-        ])
+        const [loadedPoints, loadedConfirmed, loadedDrafts, loadedAttempts, loadedSessions] =
+          await Promise.all([
+            repo.listPoints(doc.id),
+            repo.listQuestions(doc.id, 'confirmed'),
+            repo.listQuestions(doc.id, 'draft'),
+            repo.listAttempts(doc.id),
+            repo.listQuizSessions(doc.id),
+          ])
         if (cancelled) return
         setPoints(loadedPoints)
         setQuestions(loadedConfirmed)
         setDrafts(loadedDrafts)
         setAttempts(loadedAttempts)
+        setSessions(loadedSessions)
         setActiveId(loadedPoints[0]?.id ?? null)
 
         // 知识点被删掉后，本地残留的队列项要一并清理
@@ -449,6 +461,16 @@ export default function Workspace({
   }, [questions])
 
   const queuedIds = useMemo(() => new Set(queue.map((item) => item.pointId)), [queue])
+
+  /** 出题数量：含待确认的草稿 */
+  const totalByPoint = useMemo(() => {
+    const map = new Map<number, number>()
+    for (const question of [...questions, ...drafts]) {
+      if (question.knowledge_point_id == null) continue
+      map.set(question.knowledge_point_id, (map.get(question.knowledge_point_id) || 0) + 1)
+    }
+    return map
+  }, [questions, drafts])
 
   async function generatePoints() {
     if (points.length) {
@@ -962,6 +984,27 @@ export default function Workspace({
                   ))}
                 </div>
 
+                <div className="point-stats">
+                  <span>
+                    <b>{totalByPoint.get(activePoint.id) || 0}</b> 出题
+                  </span>
+                  <span>
+                    <b>{mastery.get(activePoint.id)?.total || 0}</b> 做题次数
+                  </span>
+                  <span>
+                    <b>
+                      {mastery.get(activePoint.id)?.total
+                        ? `${Math.round(
+                            (mastery.get(activePoint.id)!.correct /
+                              mastery.get(activePoint.id)!.total) *
+                              100,
+                          )}%`
+                        : '—'}
+                    </b>{' '}
+                    正确率
+                  </span>
+                </div>
+
                 {countsByPoint.get(activePoint.id) ? (
                   <div className="point-footnote">
                     该知识点题库里已有 {countsByPoint.get(activePoint.id)} 道题。
@@ -1147,6 +1190,21 @@ export default function Workspace({
                 </div>
               ) : (
                 <>
+                  {sessions.length > 0 && (
+                    <div className="session-strip">
+                      <span className="strip-label">最近做题</span>
+                      {sessions.slice(0, 3).map((session) => (
+                        <span className="session-chip" key={session.id}>
+                          {new Date(session.created_at).toLocaleDateString('zh-CN', {
+                            month: '2-digit',
+                            day: '2-digit',
+                          })}{' '}
+                          · {session.total} 题 · {session.score} 分
+                        </span>
+                      ))}
+                      <span className="strip-total">共 {sessions.length} 次</span>
+                    </div>
+                  )}
                   <div className="bank-head">
                     <h3>共 {questions.length} 题</h3>
                     <div className="menu-wrap">
@@ -1207,6 +1265,10 @@ export default function Workspace({
             repo
               .listAttempts(doc.id)
               .then(setAttempts)
+              .catch(() => undefined)
+            repo
+              .listQuizSessions(doc.id)
+              .then(setSessions)
               .catch(() => undefined)
           }}
           notify={notify}

@@ -57,6 +57,19 @@ export interface Attempt {
 
 export type NewAttempt = Omit<Attempt, 'id' | 'created_at'>
 
+/** 一次完整做题的记录 */
+export interface QuizSession {
+  id: number
+  document_id: number
+  total: number
+  correct: number
+  score: number
+  mode: string
+  created_at: string
+}
+
+export type NewQuizSession = Omit<QuizSession, 'id' | 'created_at'>
+
 export const TYPE_LABEL: Record<QuestionType, string> = {
   choice: '选择题',
   judge: '判断题',

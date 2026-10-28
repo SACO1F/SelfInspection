@@ -5,8 +5,10 @@ import type {
   DocKind,
   KnowledgePoint,
   NewAttempt,
+  NewQuizSession,
   Question,
   QuestionStatus,
+  QuizSession,
 } from './types'
 
 export type DocWithContent = Doc & { content: string }
@@ -43,6 +45,8 @@ export interface Repo {
   deleteQuestion(id: number): Promise<boolean>
   addAttempts(rows: NewAttempt[]): Promise<void>
   listAttempts(documentId: number): Promise<Attempt[]>
+  addQuizSession(row: NewQuizSession): Promise<void>
+  listQuizSessions(documentId: number): Promise<QuizSession[]>
 }
 
 export function normalizePoint(row: any): KnowledgePoint {
@@ -81,6 +85,18 @@ export function normalizeAttempt(row: any): Attempt {
     is_correct: row.is_correct === true,
     score: Number(row.score) || 0,
     chosen: row.chosen || '',
+    created_at: row.created_at || '',
+  }
+}
+
+export function normalizeSession(row: any): QuizSession {
+  return {
+    id: row.id,
+    document_id: row.document_id,
+    total: Number(row.total) || 0,
+    correct: Number(row.correct) || 0,
+    score: Number(row.score) || 0,
+    mode: row.mode || 'all',
     created_at: row.created_at || '',
   }
 }
@@ -236,6 +252,21 @@ export const cloudRepo: Repo = {
     if (error) return []
     return (data || []).map(normalizeAttempt)
   },
+
+  async addQuizSession(row) {
+    const { error } = await cloud.database.from('quiz_sessions').insert(row)
+    if (error) throw new Error('这次做题记录没有保存成功。')
+  },
+
+  async listQuizSessions(documentId) {
+    const { data, error } = await cloud.database
+      .from('quiz_sessions')
+      .select('*')
+      .eq('document_id', documentId)
+      .order('created_at', { ascending: false })
+    if (error) return []
+    return (data || []).map(normalizeSession)
+  },
 }
 
 /* ---------------------------- 游客实现 ---------------------------- */
@@ -251,7 +282,8 @@ interface GuestSnapshot {
   points: KnowledgePoint[]
   questions: Question[]
   attempts: Attempt[]
-  seq: { doc: number; point: number; question: number; attempt: number }
+  sessions: QuizSession[]
+  seq: { doc: number; point: number; question: number; attempt: number; session: number }
 }
 
 function emptySnapshot(): GuestSnapshot {
@@ -260,7 +292,8 @@ function emptySnapshot(): GuestSnapshot {
     points: [],
     questions: [],
     attempts: [],
-    seq: { doc: 0, point: 0, question: 0, attempt: 0 },
+    sessions: [],
+    seq: { doc: 0, point: 0, question: 0, attempt: 0, session: 0 },
   }
 }
 
@@ -275,11 +308,13 @@ function loadSnapshot(): GuestSnapshot {
       points: Array.isArray(parsed.points) ? parsed.points : [],
       questions: Array.isArray(parsed.questions) ? parsed.questions : [],
       attempts: Array.isArray(parsed.attempts) ? parsed.attempts : [],
+      sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
       seq: {
         doc: Number(parsed?.seq?.doc) || 0,
         point: Number(parsed?.seq?.point) || 0,
         question: Number(parsed?.seq?.question) || 0,
         attempt: Number(parsed?.seq?.attempt) || 0,
+        session: Number(parsed?.seq?.session) || 0,
       },
     }
   } catch {
@@ -415,5 +450,20 @@ export const guestRepo: Repo = {
 
   async listAttempts(documentId) {
     return memory.attempts.filter((attempt) => attempt.document_id === documentId)
+  },
+
+  async addQuizSession(row) {
+    memory.sessions.push({
+      ...row,
+      id: ++memory.seq.session,
+      created_at: new Date().toISOString(),
+    })
+    flush()
+  },
+
+  async listQuizSessions(documentId) {
+    return memory.sessions
+      .filter((session) => session.document_id === documentId)
+      .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
   },
 }

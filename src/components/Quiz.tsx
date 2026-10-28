@@ -29,6 +29,9 @@ export default function Quiz({ docTitle, questions, points, repo, onExit, notify
   const [answers, setAnswers] = useState<Record<number, string>>({})
   const [results, setResults] = useState<Record<number, ResultRow> | null>(null)
   const [grading, setGrading] = useState(false)
+  const [order, setOrder] = useState<'default' | 'objective'>('default')
+  const [stepMode, setStepMode] = useState(false)
+  const [current, setCurrent] = useState(0)
   const [startedAt] = useState(() => Date.now())
   const [elapsed, setElapsed] = useState(0)
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -40,6 +43,12 @@ export default function Quiz({ docTitle, questions, points, repo, onExit, notify
     for (const point of points) map.set(point.id, point.title)
     return map
   }, [points])
+
+  const ordered = useMemo(() => {
+    if (order === 'default') return questions
+    const rank: Record<string, number> = { choice: 0, judge: 1, short: 2 }
+    return [...questions].sort((a, b) => (rank[a.type] ?? 9) - (rank[b.type] ?? 9))
+  }, [questions, order])
 
   const answeredCount = questions.filter((question) => (answers[question.id] || '').trim()).length
 
@@ -123,12 +132,31 @@ export default function Quiz({ docTitle, questions, points, repo, onExit, notify
     } catch (error) {
       notify((error as Error).message)
     }
+    try {
+      const total = questions.length
+      if (total) {
+        const sum = questions.reduce((acc, question) => acc + (next[question.id]?.score || 0), 0)
+        const correct = questions.filter(
+          (question) => (next[question.id]?.score || 0) >= 0.999,
+        ).length
+        await repo.addQuizSession({
+          document_id: questions[0].document_id,
+          total,
+          correct,
+          score: Math.round((sum / total) * 100),
+          mode: stepMode ? 'step' : 'all',
+        })
+      }
+    } catch (error) {
+      notify((error as Error).message)
+    }
   }
 
   function retry() {
     setAnswers({})
     setResults(null)
     setElapsed(0)
+    setCurrent(0)
     scrollTop()
   }
 
@@ -164,8 +192,58 @@ export default function Quiz({ docTitle, questions, points, repo, onExit, notify
           </section>
         )}
 
+        {!results && (
+          <div className="quiz-setup">
+            <div className="setup-group">
+              <span className="setup-label">顺序</span>
+              <div className="segmented">
+                <button
+                  className={order === 'default' ? 'seg active' : 'seg'}
+                  disabled={answeredCount > 0}
+                  onClick={() => {
+                    setOrder('default')
+                    setCurrent(0)
+                  }}
+                >
+                  题库顺序
+                </button>
+                <button
+                  className={order === 'objective' ? 'seg active' : 'seg'}
+                  disabled={answeredCount > 0}
+                  onClick={() => {
+                    setOrder('objective')
+                    setCurrent(0)
+                  }}
+                >
+                  客观题优先
+                </button>
+              </div>
+            </div>
+            <div className="setup-group">
+              <span className="setup-label">方式</span>
+              <div className="segmented">
+                <button
+                  className={!stepMode ? 'seg active' : 'seg'}
+                  onClick={() => setStepMode(false)}
+                >
+                  一次性作答
+                </button>
+                <button
+                  className={stepMode ? 'seg active' : 'seg'}
+                  onClick={() => setStepMode(true)}
+                >
+                  逐题作答
+                </button>
+              </div>
+            </div>
+            {answeredCount > 0 && <span className="setup-hint">已开始作答，顺序已锁定</span>}
+          </div>
+        )}
+
         <div className="quiz-list">
-          {questions.map((question, index) => {
+          {(stepMode && !results ? [current] : ordered.map((_, index) => index)).map((index) => {
+            const question = ordered[index]
+            if (!question) return null
             const row = results?.[question.id]
             const userAnswer = (answers[question.id] || '').trim()
             const state = !row ? '' : row.score >= 0.999 ? 'right' : row.score > 0 ? 'partial' : 'wrong'
@@ -320,18 +398,46 @@ export default function Quiz({ docTitle, questions, points, repo, onExit, notify
           <>
             <div className="foot-summary">
               <span className="foot-progress">
-                已答 {answeredCount} / {questions.length}
+                {stepMode
+                  ? `第 ${current + 1} / ${ordered.length} 题 · 已答 ${answeredCount}`
+                  : `已答 ${answeredCount} / ${ordered.length}`}
               </span>
               <div className="foot-track">
                 <div
                   className="foot-track-fill"
-                  style={{ width: `${questions.length ? (answeredCount / questions.length) * 100 : 0}%` }}
+                  style={{
+                    width: `${ordered.length ? (answeredCount / ordered.length) * 100 : 0}%`,
+                  }}
                 />
               </div>
             </div>
-            <button className="btn primary" onClick={submit} disabled={grading}>
-              {grading ? '正在批改…' : '提交并查看解析'}
-            </button>
+            {stepMode ? (
+              <div className="foot-actions">
+                <button
+                  className="btn subtle"
+                  onClick={() => setCurrent((value) => Math.max(0, value - 1))}
+                  disabled={current === 0}
+                >
+                  上一题
+                </button>
+                {current < ordered.length - 1 ? (
+                  <button
+                    className="btn primary"
+                    onClick={() => setCurrent((value) => Math.min(ordered.length - 1, value + 1))}
+                  >
+                    下一题
+                  </button>
+                ) : (
+                  <button className="btn primary" onClick={submit} disabled={grading}>
+                    {grading ? '正在批改…' : '提交并查看解析'}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <button className="btn primary" onClick={submit} disabled={grading}>
+                {grading ? '正在批改…' : '提交并查看解析'}
+              </button>
+            )}
           </>
         )}
       </footer>
