@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   Attempt,
   Doc,
@@ -45,6 +45,8 @@ interface Props {
 type Tab = 'points' | 'drafts' | 'questions'
 
 const DEFAULT_COUNTS: QuestionCounts = { choice: 3, judge: 2, short: 1 }
+
+const SIDE_WIDTH_KEY = 'zhiwei.sideWidth'
 
 /** 把请求的题量压到剩余额度内，优先压缩数量最多的题型 */
 function clampCounts(counts: QuestionCounts, room: number): QuestionCounts {
@@ -387,6 +389,33 @@ export default function Workspace({
   const [quizOpen, setQuizOpen] = useState(false)
   const [attempts, setAttempts] = useState<Attempt[]>([])
   const [sessions, setSessions] = useState<QuizSession[]>([])
+
+  // 左侧栏宽度可拖拽，记住上次的宽度
+  const [sideWidth, setSideWidth] = useState(() => {
+    const saved = Number(localStorage.getItem(SIDE_WIDTH_KEY))
+    return saved >= 200 && saved <= 460 ? saved : 284
+  })
+  const widthRef = useRef(sideWidth)
+
+  function startResize(event: React.PointerEvent) {
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = sideWidth
+
+    const onMove = (moveEvent: PointerEvent) => {
+      const next = Math.min(460, Math.max(200, startWidth + moveEvent.clientX - startX))
+      widthRef.current = next
+      setSideWidth(next)
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      localStorage.setItem(SIDE_WIDTH_KEY, String(widthRef.current))
+    }
+
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
 
   const mastery = useMemo(() => {
     const map = new Map<number, { total: number; correct: number }>()
@@ -825,7 +854,7 @@ export default function Workspace({
         </div>
       </header>
 
-      <div className="ws-body">
+      <div className="ws-body" style={{ '--side-w': `${sideWidth}px` } as React.CSSProperties}>
         <aside className="ws-side">
           <div className="side-head">
             <span className="side-title">知识点</span>
@@ -906,6 +935,14 @@ export default function Workspace({
             </nav>
           )}
         </aside>
+
+        <div
+          className="ws-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          title="拖动调整宽度"
+          onPointerDown={startResize}
+        />
 
         <section className="ws-main">
           <div className="tabbar">

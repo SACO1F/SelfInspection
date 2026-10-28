@@ -209,6 +209,11 @@ textarea {
   display: flex;
   align-items: center;
   gap: 9px;
+  min-width: 0;
+}
+
+.topbar-right {
+  flex-shrink: 0;
 }
 
 .brand-mark {
@@ -413,6 +418,7 @@ textarea {
   font-size: 14px;
   font-weight: 500;
   max-width: 46vw;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -692,12 +698,36 @@ textarea {
 .ws-body {
   flex: 1;
   display: grid;
-  grid-template-columns: 284px minmax(0, 1fr);
+  grid-template-columns: var(--side-w, 284px) 9px minmax(0, 1fr);
   max-width: 1180px;
   width: 100%;
   margin: 0 auto;
   padding: 0 28px;
   gap: 0;
+}
+
+.ws-resizer {
+  position: relative;
+  width: 9px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.ws-resizer::after {
+  content: '';
+  position: absolute;
+  top: 26px;
+  bottom: 26px;
+  left: 3px;
+  width: 3px;
+  border-radius: 3px;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.ws-resizer:hover::after,
+.ws-resizer:active::after {
+  background: var(--line-2);
 }
 
 .ws-side {
@@ -2418,26 +2448,31 @@ textarea {
     padding: 0 18px;
   }
 
+  .ws-resizer {
+    display: none;
+  }
+
   .ws-side {
     position: static;
-    max-height: none;
+    max-height: 44vh;
+    overflow-y: auto;
     border-right: 0;
     border-bottom: 1px solid var(--line);
     padding: 20px 0 16px;
   }
 
   .point-list {
-    flex-direction: row;
-    overflow-x: auto;
-    gap: 8px;
-    padding-bottom: 4px;
+    flex-direction: column;
+    overflow-x: visible;
+    gap: 2px;
+    padding-bottom: 0;
   }
 
   .point-item {
-    flex: 0 0 auto;
-    max-width: 210px;
-    border: 1px solid var(--line);
-    background: var(--surface);
+    flex: none;
+    max-width: none;
+    border: 0;
+    background: transparent;
   }
 
   .ws-main {
