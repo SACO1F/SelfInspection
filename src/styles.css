@@ -2722,3 +2722,23 @@ textarea {
 .hist-item .bank-options li.picked {
   background: var(--bad-tint);
 }
+
+/* 手机端：让文档标题有更多空间，别被压成「机器…」 */
+@media (max-width: 900px) {
+  .topbar {
+    padding: 0 14px;
+    gap: 10px;
+  }
+
+  .brand-mark {
+    display: none;
+  }
+
+  .doc-head-title {
+    max-width: 42vw;
+  }
+
+  .topbar-right .btn {
+    padding: 0 10px;
+  }
+}

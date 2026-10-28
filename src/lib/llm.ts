@@ -564,9 +564,12 @@ ${kp.excerpts.join('\n\n')}
 请基于以上材料出题：
 ${parts.join('\n')}${avoid}
 
-每道题都必须附带 evidence：从上面【原文材料】里**逐字复制**的一段连续文字（不少于 15 字），
-必须能直接支撑该题的正确答案。不得改写、不得概括、不得拼接不相邻的句子。
-如果某道题在原文里找不到明确依据，就不要出这道题。
+每道题都必须附带 evidence：从上面【原文材料】里**逐字复制**的一段连续文字。
+要求：
+- 30–120 字，必须是完整的一句话（最多连续两句），读起来自成一体；
+- 必须把「为什么这个答案成立」的依据说清楚，而不是只出现题干里的几个词；
+- 不要只摘短语、不要把题干换个说法抄一遍、不要拼接不相邻的句子。
+如果某道题在原文里找不到能完整支撑答案的句子，就不要出这道题。
 
 输出格式（JSON）：
 {"questions":[
@@ -759,11 +762,16 @@ function normalizeJudgeText(value: string): string {
   return ''
 }
 
-/** 原文依据校验：evidence 必须逐字出现在知识点摘录中 */
+/** 原文依据校验：evidence 必须是摘录里一段足够完整的原文，且不能只是重复题干 */
 function matchesSource(kp: RawKP, question: RawQuestion): boolean {
   const squeeze = (value: string) => String(value || '').replace(/\s+/g, '')
   const evidence = squeeze(question.evidence || '')
-  if (evidence.length < 12) return false
+  if (evidence.length < 24) return false
+
+  // 把题干抄回来当依据，等于没给依据
+  const stem = squeeze(question.stem)
+  if (stem.includes(evidence)) return false
+
   return squeeze(kp.excerpts.join('')).includes(evidence)
 }
 
