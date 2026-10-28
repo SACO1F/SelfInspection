@@ -680,9 +680,21 @@ export default function Workspace({
     try {
       const ids = drafts.map((item) => item.id)
       const updated = await repo.confirmQuestions(ids)
+
+      // 数据库被权限拦下时不会报错、只会返回 0 行，这里必须显式检查，否则草稿会白白消失
+      if (!updated.length) {
+        notify('加入题库失败：数据库没有接受这次更新，草稿已保留。')
+        return
+      }
+
+      const doneIds = updated.map((item) => item.id)
       setQuestions((prev) => [...prev, ...updated])
-      setDrafts((prev) => prev.filter((item) => !ids.includes(item.id)))
-      notify(`已把 ${ids.length} 道题加入题库。`)
+      setDrafts((prev) => prev.filter((item) => !doneIds.includes(item.id)))
+      notify(
+        updated.length === ids.length
+          ? `已把 ${updated.length} 道题加入题库。`
+          : `已加入 ${updated.length} 道，其余 ${ids.length - updated.length} 道失败，草稿已保留。`,
+      )
       setTab('questions')
     } catch (err) {
       notify(describeError(err))
