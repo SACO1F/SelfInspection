@@ -45,7 +45,7 @@ export interface Repo {
   deleteQuestion(id: number): Promise<boolean>
   addAttempts(rows: NewAttempt[]): Promise<void>
   listAttempts(documentId: number): Promise<Attempt[]>
-  addQuizSession(row: NewQuizSession): Promise<void>
+  addQuizSession(row: NewQuizSession): Promise<QuizSession | null>
   listQuizSessions(documentId: number): Promise<QuizSession[]>
 }
 
@@ -86,6 +86,7 @@ export function normalizeAttempt(row: any): Attempt {
     score: Number(row.score) || 0,
     chosen: row.chosen || '',
     created_at: row.created_at || '',
+    session_id: row.session_id ?? null,
   }
 }
 
@@ -254,8 +255,13 @@ export const cloudRepo: Repo = {
   },
 
   async addQuizSession(row) {
-    const { error } = await cloud.database.from('quiz_sessions').insert(row)
+    const { data, error } = await cloud.database
+      .from('quiz_sessions')
+      .insert(row)
+      .select()
+      .maybeSingle()
     if (error) throw new Error('这次做题记录没有保存成功。')
+    return data ? normalizeSession(data) : null
   },
 
   async listQuizSessions(documentId) {
@@ -453,12 +459,14 @@ export const guestRepo: Repo = {
   },
 
   async addQuizSession(row) {
-    memory.sessions.push({
+    const created: QuizSession = {
       ...row,
       id: ++memory.seq.session,
       created_at: new Date().toISOString(),
-    })
+    }
+    memory.sessions.push(created)
     flush()
+    return created
   },
 
   async listQuizSessions(documentId) {

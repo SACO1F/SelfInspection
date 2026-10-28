@@ -42,7 +42,7 @@ interface Props {
   notify: (message: string) => void
 }
 
-type Tab = 'points' | 'drafts' | 'questions'
+type Tab = 'points' | 'drafts' | 'questions' | 'history'
 
 const DEFAULT_COUNTS: QuestionCounts = { choice: 3, judge: 2, short: 1 }
 
@@ -334,6 +334,91 @@ function DraftCard({
   )
 }
 
+function formatStamp(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
+    date.getHours(),
+  )}:${pad(date.getMinutes())}`
+}
+
+function HistoryRecord({
+  attempt,
+  question,
+  index,
+}: {
+  attempt: Attempt
+  question?: Question
+  index: number
+}) {
+  return (
+    <article className={`hist-item ${attempt.is_correct ? 'right' : 'wrong'}`}>
+      <div className="hist-head">
+        <span className="quiz-no">{String(index + 1).padStart(2, '0')}</span>
+        <span className="type-chip">{TYPE_LABEL[attempt.type]}</span>
+        <span className={`quiz-flag ${attempt.is_correct ? 'right' : 'wrong'}`}>
+          {attempt.is_correct ? '正确' : '错误'}
+        </span>
+      </div>
+
+      {question ? (
+        <>
+          <p className="quiz-stem">{question.stem}</p>
+
+          {question.type === 'choice' && (
+            <ul className="bank-options">
+              {question.options.map((option, oi) => {
+                const letter = LETTERS[oi]
+                const className = [
+                  letter === question.answer ? 'right' : '',
+                  letter === attempt.chosen && letter !== question.answer ? 'picked' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')
+                return (
+                  <li key={oi} className={className}>
+                    <span>{letter}</span>
+                    {option}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+
+          <div className="hist-answers">
+            <span>
+              我的答案 <b>{attempt.chosen || '未作答'}</b>
+            </span>
+            <span>
+              正确答案 <b>{question.answer}</b>
+            </span>
+          </div>
+
+          {question.explanation && (
+            <div className="quiz-explain">
+              <span className="explain-label">解析</span>
+              <p>{question.explanation}</p>
+            </div>
+          )}
+
+          {question.evidence && (
+            <div className="quiz-explain">
+              <span className="explain-label">原文出处</span>
+              <p>{question.evidence}</p>
+            </div>
+          )}
+        </>
+      ) : (
+        <p className="hist-missing">
+          这道题已被删除，只留下作答记录：{attempt.chosen || '未作答'} ·{' '}
+          {attempt.is_correct ? '答对' : '答错'}
+        </p>
+      )}
+    </article>
+  )
+}
+
 function BankItem({
   question,
   onDelete,
@@ -389,6 +474,18 @@ export default function Workspace({
   const [quizOpen, setQuizOpen] = useState(false)
   const [attempts, setAttempts] = useState<Attempt[]>([])
   const [sessions, setSessions] = useState<QuizSession[]>([])
+  const [activeSession, setActiveSession] = useState<number | null>(null)
+
+  const questionMap = useMemo(() => {
+    const map = new Map<number, Question>()
+    for (const question of [...questions, ...drafts]) map.set(question.id, question)
+    return map
+  }, [questions, drafts])
+
+  const activeSessionRow = sessions.find((item) => item.id === activeSession) || null
+  const sessionAttempts = activeSession
+    ? attempts.filter((attempt) => attempt.session_id === activeSession)
+    : []
 
   // 左侧栏宽度可拖拽，记住上次的宽度
   const [sideWidth, setSideWidth] = useState(() => {
@@ -754,8 +851,40 @@ export default function Workspace({
     }
   }
 
-  async function removeQuestion(id: number) {
-    const removed = await repo.deleteQuestion(id)
+  function exportSession(id: number) {
+    const session = sessions.find((item) => item.id === id)
+    if (!session) return
+    const rows = attempts.filter((item) => item.session_id === id)
+    const lines: string[] = [
+      `# ${doc.title} · 做题记录`,
+      '',
+      `时间：${formatStamp(session.created_at)}　得分：${session.score} 分（答对 ${session.correct} / ${session.total}）`,
+      '',
+    ]
+
+    rows.forEach((attempt, index) => {
+      const question = questionMap.get(attempt.question_id)
+      lines.push(`## ${index + 1}. ${question?.stem || '（题目已删除）'}`)
+      lines.push('')
+      if (question?.options.length) {
+        question.options.forEach((option, oi) => lines.push(`- ${LETTERS[oi]}. ${option}`))
+        lines.push('')
+      }
+      lines.push(`- 我的答案：${attempt.chosen || '未作答'}`)
+      lines.push(`- 正确答案：${question?.answer || '—'}`)
+      lines.push(`- 判定：${attempt.is_correct ? '正确' : '错误'}`)
+      if (question?.explanation) lines.push(`- 解析：${question.explanation}`)
+      if (question?.evidence) lines.push(`- 原文出处：${question.evidence}`)
+      lines.push('')
+    })
+
+    downloadBlob(
+      new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' }),
+      `${safeFileName(doc.title)}-做题记录-${session.id}.md`,
+    )
+  }
+
+  async function removeQuestion(id: number) {    const removed = await repo.deleteQuestion(id)
     if (!removed) {
       notify('删除失败，请稍后重试。')
       return
@@ -964,6 +1093,12 @@ export default function Workspace({
               onClick={() => setTab('questions')}
             >
               题库 {questions.length > 0 && <span className="tab-badge">{questions.length}</span>}
+            </button>
+            <button
+              className={tab === 'history' ? 'tab active' : 'tab'}
+              onClick={() => setTab('history')}
+            >
+              做题记录 {sessions.length > 0 && <span className="tab-badge">{sessions.length}</span>}
             </button>
           </div>
 
@@ -1225,6 +1360,73 @@ export default function Workspace({
                     </div>
                   </div>
                 </div>
+              ) : tab === 'history' ? (
+                sessions.length === 0 ? (
+                  <div className="empty tall">
+                    <p className="empty-title">还没有做题记录</p>
+                    <p className="empty-text">
+                      做完一套题之后，这里会保留每一道题的作答、正确答案、解析和原文出处，随时可以回看或导出。
+                    </p>
+                    <button className="btn primary" onClick={() => setQuizOpen(true)}>
+                      开始做题
+                    </button>
+                  </div>
+                ) : (
+                  <div className="history-panel">
+                    <div className="history-list">
+                      {sessions.map((session) => (
+                        <button
+                          key={session.id}
+                          className={
+                            activeSession === session.id ? 'history-item active' : 'history-item'
+                          }
+                          onClick={() =>
+                            setActiveSession(activeSession === session.id ? null : session.id)
+                          }
+                        >
+                          <span className="history-time">{formatStamp(session.created_at)}</span>
+                          <span className="history-meta">
+                            答对 {session.correct} / {session.total}
+                          </span>
+                          <span className="history-mode">
+                            {session.mode === 'step' ? '逐题' : '整卷'}
+                          </span>
+                          <span className="history-score">{session.score} 分</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {activeSessionRow && (
+                      <div className="history-detail">
+                        <div className="history-detail-head">
+                          <span className="history-detail-title">
+                            {formatStamp(activeSessionRow.created_at)} 的作答
+                          </span>
+                          <button
+                            className="btn subtle small"
+                            onClick={() => exportSession(activeSessionRow.id)}
+                          >
+                            导出这次记录
+                          </button>
+                        </div>
+                        {sessionAttempts.length === 0 ? (
+                          <p className="hist-missing">
+                            这次记录没有逐题数据（可能是更早版本留下的记录）。
+                          </p>
+                        ) : (
+                          sessionAttempts.map((attempt, index) => (
+                            <HistoryRecord
+                              key={attempt.id}
+                              attempt={attempt}
+                              question={questionMap.get(attempt.question_id)}
+                              index={index}
+                            />
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
               ) : (
                 <>
                   {sessions.length > 0 && (

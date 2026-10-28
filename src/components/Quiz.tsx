@@ -113,25 +113,7 @@ export default function Quiz({ docTitle, questions, points, repo, onExit, notify
     setGrading(false)
     scrollTop()
 
-    // 落库用于掌握度统计；失败不影响本次成绩展示
-    try {
-      await repo.addAttempts(
-        questions.map((question) => {
-          const score = next[question.id]?.score || 0
-          return {
-            document_id: question.document_id,
-            question_id: question.id,
-            knowledge_point_id: question.knowledge_point_id,
-            type: question.type,
-            is_correct: score >= 0.999,
-            score: Math.round(score * 100),
-            chosen: answers[question.id] || '',
-          }
-        }),
-      )
-    } catch (error) {
-      notify((error as Error).message)
-    }
+    // 落库：先建这一次的记录，再把每道题的作答挂上去，便于以后回溯
     try {
       const total = questions.length
       if (total) {
@@ -139,13 +121,29 @@ export default function Quiz({ docTitle, questions, points, repo, onExit, notify
         const correct = questions.filter(
           (question) => (next[question.id]?.score || 0) >= 0.999,
         ).length
-        await repo.addQuizSession({
+        const session = await repo.addQuizSession({
           document_id: questions[0].document_id,
           total,
           correct,
           score: Math.round((sum / total) * 100),
           mode: stepMode ? 'step' : 'all',
         })
+
+        await repo.addAttempts(
+          questions.map((question) => {
+            const score = next[question.id]?.score || 0
+            return {
+              document_id: question.document_id,
+              question_id: question.id,
+              knowledge_point_id: question.knowledge_point_id,
+              type: question.type,
+              is_correct: score >= 0.999,
+              score: Math.round(score * 100),
+              chosen: answers[question.id] || '',
+              session_id: session?.id ?? null,
+            }
+          }),
+        )
       }
     } catch (error) {
       notify((error as Error).message)
@@ -361,6 +359,13 @@ export default function Quiz({ docTitle, questions, points, repo, onExit, notify
                   <div className="quiz-explain">
                     <span className="explain-label">解析</span>
                     <p>{question.explanation}</p>
+                  </div>
+                )}
+
+                {results && question.evidence && (
+                  <div className="quiz-explain">
+                    <span className="explain-label">原文出处</span>
+                    <p>{question.evidence}</p>
                   </div>
                 )}
 

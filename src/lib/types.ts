@@ -53,6 +53,8 @@ export interface Attempt {
   score: number
   chosen: string
   created_at: string
+  /** 所属的那一次做题；老数据为空 */
+  session_id?: number | null
 }
 
 export type NewAttempt = Omit<Attempt, 'id' | 'created_at'>
