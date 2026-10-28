@@ -26,6 +26,77 @@ const MIME = {
   '.map': 'application/json; charset=utf-8',
 }
 
+/* ---------------------------- 按 IP 限流 ---------------------------- */
+
+const LIMITS = {
+  perMinute: Number(config?.rateLimit?.perMinute) || 30,
+  perDay: Number(config?.rateLimit?.perDay) || 500,
+}
+
+/** ip → { minuteWindow, minuteCount, dayWindow, dayCount } */
+const hits = new Map()
+
+function clientIp(req) {
+  const forwarded = String(req.headers['x-forwarded-for'] || '')
+    .split(',')[0]
+    .trim()
+  return forwarded || req.socket?.remoteAddress || 'unknown'
+}
+
+function takeQuota(ip) {
+  const now = Date.now()
+  const minuteWindow = Math.floor(now / 60000)
+  const dayWindow = Math.floor(now / 86400000)
+
+  const row = hits.get(ip) || { minuteWindow, minuteCount: 0, dayWindow, dayCount: 0 }
+  if (row.minuteWindow !== minuteWindow) {
+    row.minuteWindow = minuteWindow
+    row.minuteCount = 0
+  }
+  if (row.dayWindow !== dayWindow) {
+    row.dayWindow = dayWindow
+    row.dayCount = 0
+  }
+
+  const overMinute = row.minuteCount >= LIMITS.perMinute
+  const overDay = row.dayCount >= LIMITS.perDay
+  if (!overMinute && !overDay) {
+    row.minuteCount += 1
+    row.dayCount += 1
+  }
+  hits.set(ip, row)
+
+  // 防止 Map 无限增长
+  if (hits.size > 2000) {
+    for (const [key, value] of hits) {
+      if (value.dayWindow !== dayWindow) hits.delete(key)
+    }
+  }
+
+  return {
+    allowed: !overMinute && !overDay,
+    minuteLeft: Math.max(0, LIMITS.perMinute - row.minuteCount),
+    dayLeft: Math.max(0, LIMITS.perDay - row.dayCount),
+    overDay,
+  }
+}
+
+function peekQuota(ip) {
+  const now = Date.now()
+  const minuteWindow = Math.floor(now / 60000)
+  const dayWindow = Math.floor(now / 86400000)
+  const row = hits.get(ip)
+  if (!row) return { minuteLeft: LIMITS.perMinute, dayLeft: LIMITS.perDay }
+  return {
+    minuteLeft:
+      row.minuteWindow === minuteWindow
+        ? Math.max(0, LIMITS.perMinute - row.minuteCount)
+        : LIMITS.perMinute,
+    dayLeft:
+      row.dayWindow === dayWindow ? Math.max(0, LIMITS.perDay - row.dayCount) : LIMITS.perDay,
+  }
+}
+
 async function readBody(req) {
   const chunks = []
   for await (const chunk of req) chunks.push(chunk)
@@ -94,14 +165,33 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`)
 
   if (url.pathname === '/api/chat') {
+    const ip = clientIp(req)
+
     if (req.method === 'GET') {
-      sendJson(res, 200, config?.model ? { configured: true, model: config.model } : { configured: false })
+      sendJson(res, 200, {
+        configured: Boolean(config?.model),
+        model: config?.model || '',
+        limit: LIMITS,
+        remaining: peekQuota(ip),
+      })
       return
     }
+
     if (req.method === 'POST') {
+      const quota = takeQuota(ip)
+      if (!quota.allowed) {
+        sendJson(res, 429, {
+          error: quota.overDay
+            ? '这个网络今天的额度用完了，明天再来。'
+            : '请求太频繁了，等几秒再试。',
+          remaining: { minute: quota.minuteLeft, day: quota.dayLeft },
+        })
+        return
+      }
       await proxyChat(req, res)
       return
     }
+
     res.writeHead(405).end()
     return
   }
